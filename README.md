@@ -23,6 +23,8 @@ lib = TSVCLibrary()  # compiles on first use
 - `compiler_config.py` — shared compiler flags for both C++ and DaCe pipelines
 - `tsvc_2/` — 151 TSVC-2 microkernels, split/compile tooling, and Python bindings. See [`tsvc_2/README.md`](tsvc_2/README.md).
 
+See [tsvc_2/README.md](tsvc_2/README.md) for details.
+
 ## License
 
 TSVC-2 loop suite originates from [UoB-HPC/TSVC_2](https://github.com/UoB-HPC/TSVC_2).
