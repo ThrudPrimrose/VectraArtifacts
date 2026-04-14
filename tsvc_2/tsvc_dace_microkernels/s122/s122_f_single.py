@@ -1,0 +1,16 @@
+import dace
+import numpy as np
+from math import sin, cos, log, exp, pow
+
+LEN_1D = dace.symbol("LEN_1D")
+
+@dace.program
+def s122_f_single(
+    a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], n1: dace.int64, n3: dace.int64
+):
+    j = 1
+    k = 0
+    for i in range(n1 - 1, LEN_1D, n3):
+        k = k + j
+        a[i] = a[i] + b[LEN_1D - k]
+
