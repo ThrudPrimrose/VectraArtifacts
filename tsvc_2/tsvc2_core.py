@@ -337,7 +337,10 @@ def dace_s161(
     e: dace.float64[LEN_1D],
 ):
     for nl in range(ITERATIONS // 2):
-        for i in range(LEN_1D):
+        # ``c[i + 1]`` write: loop to ``LEN_1D - 1`` so the store stays in
+        # bounds (upstream TSVC s161 loops ``i < LEN_1D - 1``; the original
+        # port mis-transcribed this as ``range(LEN_1D)``, writing ``c[LEN_1D]``).
+        for i in range(LEN_1D - 1):
             if b[i] < 0.0:
                 c[i + 1] = a[i] + d[i] * d[i]
             else:
@@ -1186,7 +1189,7 @@ def dace_s311(a: dace.float64[LEN_1D], sum_out: dace.float64[LEN_1D]):
 def dace_s31111(a: dace.float64[LEN_1D], b: dace.float64[2]):
     for nl in range(2000 * ITERATIONS):
         sum_val = 0.0
-        for base in range(0, LEN_1D, 4):
+        for base in range(0, LEN_1D - 3, 4):
             partial = 0.0
             partial = partial + a[base + 0]
             partial = partial + a[base + 1]
@@ -1474,7 +1477,7 @@ def dace_s351(
 ):
     alpha = c[0]
     for nl in range(8 * ITERATIONS):
-        for i in range(0, LEN_1D, 4):
+        for i in range(0, LEN_1D - 3, 4):
             a[i] = a[i] + alpha * b[i]
             a[i + 1] = a[i + 1] + alpha * b[i + 1]
             a[i + 2] = a[i + 2] + alpha * b[i + 2]
@@ -1495,7 +1498,7 @@ def dace_s352(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[
     dot = 0.0
     for nl in range(8 * ITERATIONS):
         dot = 0.0
-        for i in range(0, LEN_1D, 4):
+        for i in range(0, LEN_1D - 4, 5):
             dot = dot + (
                 a[i] * b[i]
                 + a[i + 1] * b[i + 1]
@@ -1515,7 +1518,7 @@ def dace_s353(
 ):
     alpha = c[0]
     for nl in range(ITERATIONS):
-        for i in range(0, LEN_1D, 4):
+        for i in range(0, LEN_1D - 3, 4):
             a[i] = a[i] + alpha * b[ip[i]]
             a[i + 1] = a[i + 1] + alpha * b[ip[i + 1]]
             a[i + 2] = a[i + 2] + alpha * b[ip[i + 2]]
@@ -1550,7 +1553,7 @@ def dace_s422(a: dace.float64[LEN_1D], flat_2d_array: dace.float64[LEN_1D * LEN_
 
 
 @dace.program
-def dace_s423(a: dace.float64[LEN_1D], flat_2d_array: dace.float64[LEN_1D]):
+def dace_s423(a: dace.float64[LEN_1D], flat_2d_array: dace.float64[LEN_1D * LEN_1D]):
     vl = 64
     for nl in range(4 * ITERATIONS):
         for i in range(LEN_1D - 1):

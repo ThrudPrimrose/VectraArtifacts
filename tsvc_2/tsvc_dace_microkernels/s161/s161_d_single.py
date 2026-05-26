@@ -12,7 +12,7 @@ def s161_d_single(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for i in range(LEN_1D):
+    for i in range(LEN_1D - 1):
         if b[i] < 0.0:
             c[i + 1] = a[i] + d[i] * d[i]
         else:

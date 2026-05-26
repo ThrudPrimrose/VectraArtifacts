@@ -14,7 +14,7 @@ def s161_f(
     e: dace.float32[LEN_1D],
 ):
     for nl in range(ITERATIONS // 2):
-        for i in range(LEN_1D):
+        for i in range(LEN_1D - 1):
             if b[i] < 0.0:
                 c[i + 1] = a[i] + d[i] * d[i]
             else:

@@ -664,7 +664,9 @@ void s161_run_timed(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock::now();
   {
     for (int nl = 0; nl < iterations / 2; ++nl) {
-      for (int i = 0; i < len_1d; ++i) {
+      // ``c[i + 1]`` write: loop to ``len_1d - 1`` so the store stays in
+      // bounds (upstream TSVC s161 loops ``i < len_1d - 1``).
+      for (int i = 0; i < len_1d - 1; ++i) {
 
         if (b[i] < 0.0) {
           // L20
@@ -1916,7 +1918,7 @@ void s31111_run_timed(double *__restrict__ a, double *__restrict__ b,
   {
     for (int nl = 0; nl < 2000 * iterations; nl++) {
       double sum = 0.0;
-      for (int base = 0; base < len_1d; base += 4)
+      for (int base = 0; base < len_1d - 3; base += 4)
         sum += s31111_test(&a[base]);
 
       b[0] = sum;
@@ -2716,7 +2718,7 @@ void s351_run_timed(double *__restrict__ a, const double *__restrict__ b,
 
   double alpha = c[0];
   for (int nl = 0; nl < 8 * iterations; ++nl) {
-    for (int i = 0; i < len_1d; i += 4) {
+    for (int i = 0; i < len_1d - 3; i += 4) {
       a[i] += alpha * b[i];
       a[i + 1] += alpha * b[i + 1];
       a[i + 2] += alpha * b[i + 2];
@@ -2761,7 +2763,7 @@ void s352_run_timed(const double *__restrict__ a, const double *__restrict__ b,
   double dot = 0.0;
   for (int nl = 0; nl < 8 * iterations; ++nl) {
     dot = 0.0;
-    for (int i = 0; i < len_1d; i += 4) {
+    for (int i = 0; i < len_1d - 4; i += 5) {
       dot += a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] +
              a[i + 3] * b[i + 3] + a[i + 4] * b[i + 4];
     }
@@ -2781,7 +2783,7 @@ void s353_run_timed(double *__restrict__ a, const double *__restrict__ b,
 
   double alpha = c[0];
   for (int nl = 0; nl < iterations; ++nl) {
-    for (int i = 0; i < len_1d; i += 4) {
+    for (int i = 0; i < len_1d - 3; i += 4) {
       a[i] += alpha * b[ip[i]];
       a[i + 1] += alpha * b[ip[i + 1]];
       a[i + 2] += alpha * b[ip[i + 2]];

@@ -17,7 +17,7 @@ void s161_d(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock::now();
   {
     for (int nl = 0; nl < iterations / 2; ++nl) {
-      for (int i = 0; i < len_1d; ++i) {
+      for (int i = 0; i < len_1d - 1; ++i) {
 
         if (b[i] < 0.0) {
           // L20

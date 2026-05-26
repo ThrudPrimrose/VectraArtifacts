@@ -16,7 +16,7 @@ void s161_f_single(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock::now();
   {
-      for (int i = 0; i < len_1d; ++i) {
+      for (int i = 0; i < len_1d - 1; ++i) {
 
         if (b[i] < 0.0f) {
           // L20
