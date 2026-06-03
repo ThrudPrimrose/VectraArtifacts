@@ -8,7 +8,7 @@ LEN_1D = dace.symbol("LEN_1D")
 def s352_d_single(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[2]):
     dot = 0.0
     dot = 0.0
-    for i in range(0, LEN_1D, 4):
+    for i in range(0, LEN_1D - 4, 5):
         dot = dot + (
             a[i] * b[i]
             + a[i + 1] * b[i + 1]

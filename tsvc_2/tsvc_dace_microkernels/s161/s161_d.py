@@ -14,6 +14,9 @@ def s161_d(
     e: dace.float64[LEN_1D],
 ):
     for nl in range(ITERATIONS // 2):
+        # ``c[i + 1]`` write: loop to ``LEN_1D - 1`` so the store stays in
+        # bounds (upstream TSVC s161 loops ``i < LEN_1D - 1``; the original
+        # port mis-transcribed this as ``range(LEN_1D)``, writing ``c[LEN_1D]``).
         for i in range(LEN_1D - 1):
             if b[i] < 0.0:
                 c[i + 1] = a[i] + d[i] * d[i]

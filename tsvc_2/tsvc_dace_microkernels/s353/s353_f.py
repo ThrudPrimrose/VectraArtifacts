@@ -14,7 +14,7 @@ def s353_f(
 ):
     alpha = c[0]
     for nl in range(ITERATIONS):
-        for i in range(0, LEN_1D, 4):
+        for i in range(0, LEN_1D - 3, 4):
             a[i] = a[i] + alpha * b[ip[i]]
             a[i + 1] = a[i + 1] + alpha * b[ip[i + 1]]
             a[i + 2] = a[i + 2] + alpha * b[ip[i + 2]]

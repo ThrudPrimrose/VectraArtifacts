@@ -1,0 +1,19 @@
+#include <chrono>
+#include <cstdint>
+#include <cmath>
+using clock_highres = std::chrono::high_resolution_clock;
+
+extern "C" {
+
+// ext_strided_load_2_f: dst[i] = src[i * 2] * scale (constant-stride sibling)
+void ext_strided_load_2_f(float *__restrict__ dst, const float *__restrict__ src, const float scale,
+                                  const int len_1d, std::int64_t * __restrict__ time_ns) {
+  auto t1 = clock_highres::now();
+  for (int i = 0; i < len_1d; ++i) {
+    dst[i] = src[i * 2] * scale;
+  }
+  auto t2 = clock_highres::now();
+  time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+}
+
+} // extern "C"

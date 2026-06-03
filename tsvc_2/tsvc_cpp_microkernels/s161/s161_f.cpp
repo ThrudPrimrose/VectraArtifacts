@@ -17,6 +17,8 @@ void s161_f(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock::now();
   {
     for (int nl = 0; nl < iterations / 2; ++nl) {
+      // ``c[i + 1]`` write: loop to ``len_1d - 1`` so the store stays in
+      // bounds (upstream TSVC s161_f loops ``i < len_1d - 1``).
       for (int i = 0; i < len_1d - 1; ++i) {
 
         if (b[i] < 0.0f) {

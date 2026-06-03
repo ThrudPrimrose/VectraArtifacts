@@ -3,6 +3,7 @@ import numpy as np
 from math import sin, cos, log, exp, pow
 
 LEN_1D = dace.symbol("LEN_1D")
+M = dace.symbol("M")
 
 @dace.program
 def s174_d_single(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], M: dace.int64):

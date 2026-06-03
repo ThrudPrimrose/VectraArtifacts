@@ -11,7 +11,7 @@ def s351_f(
 ):
     alpha = c[0]
     for nl in range(8 * ITERATIONS):
-        for i in range(0, LEN_1D, 4):
+        for i in range(0, LEN_1D - 3, 4):
             a[i] = a[i] + alpha * b[i]
             a[i + 1] = a[i + 1] + alpha * b[i + 1]
             a[i + 2] = a[i + 2] + alpha * b[i + 2]

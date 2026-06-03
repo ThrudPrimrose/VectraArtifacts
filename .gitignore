@@ -27,12 +27,22 @@
 build/
 cmake-build-*/
 .cmake/
+.tsvc_build/
+.tsvc_ext_build/
+.dace_build/
+.dace_ext_build/
+
+# Markdown / LaTeX / DB outputs from vectra-plot / vectra-populate
+*.db
+*.db-journal
 
 # Python artifacts
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.ruff_cache/
+*.egg-info/
 
 # Editor/IDE files
 .vscode/

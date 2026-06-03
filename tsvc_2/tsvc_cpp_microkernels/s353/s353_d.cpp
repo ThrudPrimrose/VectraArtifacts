@@ -13,7 +13,7 @@ void s353_d(double *__restrict__ a, const double *__restrict__ b,
 
   double alpha = c[0];
   for (int nl = 0; nl < iterations; ++nl) {
-    for (int i = 0; i < len_1d; i += 4) {
+    for (int i = 0; i < len_1d - 3; i += 4) {
       a[i] += alpha * b[ip[i]];
       a[i + 1] += alpha * b[ip[i + 1]];
       a[i + 2] += alpha * b[ip[i + 2]];

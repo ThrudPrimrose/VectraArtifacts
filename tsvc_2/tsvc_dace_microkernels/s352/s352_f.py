@@ -10,7 +10,7 @@ def s352_f(a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], c: dace.float32[2])
     dot = 0.0
     for nl in range(8 * ITERATIONS):
         dot = 0.0
-        for i in range(0, LEN_1D, 4):
+        for i in range(0, LEN_1D - 4, 5):
             dot = dot + (
                 a[i] * b[i]
                 + a[i + 1] * b[i + 1]

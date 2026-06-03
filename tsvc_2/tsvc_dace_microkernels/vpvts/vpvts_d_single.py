@@ -3,7 +3,7 @@ import numpy as np
 from math import sin, cos, log, exp, pow
 
 LEN_1D = dace.symbol("LEN_1D")
-S = dace.symbol('S')
+S = dace.symbol("S")
 
 @dace.program
 def vpvts_d_single(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):

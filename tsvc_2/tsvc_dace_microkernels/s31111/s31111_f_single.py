@@ -7,7 +7,7 @@ LEN_1D = dace.symbol("LEN_1D")
 @dace.program
 def s31111_f_single(a: dace.float32[LEN_1D], b: dace.float32[2]):
     sum_val = 0.0
-    for base in range(0, LEN_1D, 4):
+    for base in range(0, LEN_1D - 3, 4):
         partial = 0.0
         partial = partial + a[base + 0]
         partial = partial + a[base + 1]

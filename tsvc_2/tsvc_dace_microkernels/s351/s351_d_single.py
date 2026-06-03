@@ -9,7 +9,7 @@ def s351_d_single(
     a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D]
 ):
     alpha = c[0]
-    for i in range(0, LEN_1D, 4):
+    for i in range(0, LEN_1D - 3, 4):
         a[i] = a[i] + alpha * b[i]
         a[i + 1] = a[i + 1] + alpha * b[i + 1]
         a[i + 2] = a[i + 2] + alpha * b[i + 2]

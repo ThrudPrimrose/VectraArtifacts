@@ -17,7 +17,7 @@ void s351_f(float *__restrict__ a, const float *__restrict__ b,
 
   float alpha = c[0];
   for (int nl = 0; nl < 8 * iterations; ++nl) {
-    for (int i = 0; i < len_1d; i += 4) {
+    for (int i = 0; i < len_1d - 3; i += 4) {
       a[i] += alpha * b[i];
       a[i + 1] += alpha * b[i + 1];
       a[i + 2] += alpha * b[i + 2];

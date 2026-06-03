@@ -1,14 +1,67 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "vectra-artifacts"
-version = "0.1.0"
+version = "0.2.0"
+description = "Benchmark infrastructure for comparing native C++ compiler auto-vectorization against DaCe-generated code across the TSVC-2 loop suite."
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ETH Zurich SPCL" }]
+keywords = ["vectorization", "tsvc", "benchmark", "dace", "compiler", "auto-vectorization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Compilers",
+]
+dependencies = [
+    "numpy>=1.23",
+]
+
+[project.optional-dependencies]
+dace = ["dace>=1.0"]
+dev = [
+    "pytest>=7",
+    "pytest-xdist>=3",
+    "yapf>=0.40",
+]
+
+[project.urls]
+Homepage = "https://github.com/ThrudPrimrose/VectraArtifacts"
+Repository = "https://github.com/ThrudPrimrose/VectraArtifacts"
+Issues = "https://github.com/ThrudPrimrose/VectraArtifacts/issues"
+
+[project.scripts]
+vectra-populate = "vectra_artifacts.cli:main_populate"
+vectra-plot = "vectra_artifacts.cli:main_plot"
+vectra-source-sh = "vectra_artifacts.cli:main_source_sh"
 
 [tool.setuptools]
+# Two top-level packages: the new ``vectra_artifacts`` (under ``src/`` per
+# modern best practice) and the legacy ``tsvc_2`` directory (kernel data
+# + pre-existing tooling). ``compiler_config`` is kept as a top-level
+# module for backward compatibility; it re-exports from
+# ``vectra_artifacts.compilers.config``.
 py-modules = ["compiler_config"]
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src", "."]
+include = ["vectra_artifacts*", "tsvc_2*", "tsvc_2_5*"]
+
+[tool.setuptools.package-data]
+vectra_artifacts = ["py.typed", "data/*.md", "data/*.csv"]
+
+[tool.yapf]
+based_on_style = "pep8"
+column_limit = 120
+spaces_before_comment = 2

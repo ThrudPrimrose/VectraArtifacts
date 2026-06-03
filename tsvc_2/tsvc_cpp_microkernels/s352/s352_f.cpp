@@ -14,7 +14,7 @@ void s352_f(const float *__restrict__ a, const float *__restrict__ b,
   float dot = 0.0f;
   for (int nl = 0; nl < 8 * iterations; ++nl) {
     dot = 0.0f;
-    for (int i = 0; i < len_1d; i += 4) {
+    for (int i = 0; i < len_1d - 4; i += 5) {
       dot += a[i] * b[i] + a[i + 1] * b[i + 1] + a[i + 2] * b[i + 2] +
              a[i + 3] * b[i + 3] + a[i + 4] * b[i + 4];
     }

@@ -9,7 +9,7 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s31111_f(a: dace.float32[LEN_1D], b: dace.float32[2]):
     for nl in range(2000 * ITERATIONS):
         sum_val = 0.0
-        for base in range(0, LEN_1D, 4):
+        for base in range(0, LEN_1D - 3, 4):
             partial = 0.0
             partial = partial + a[base + 0]
             partial = partial + a[base + 1]

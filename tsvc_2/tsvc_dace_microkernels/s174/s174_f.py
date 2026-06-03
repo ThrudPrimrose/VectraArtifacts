@@ -4,6 +4,7 @@ from math import sin, cos, log, exp, pow
 
 LEN_1D = dace.symbol("LEN_1D")
 ITERATIONS = dace.symbol("ITERATIONS")
+M = dace.symbol("M")
 
 @dace.program
 def s174_f(a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], M: dace.int64):
