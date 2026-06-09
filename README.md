@@ -12,7 +12,36 @@ Repository: <https://github.com/ThrudPrimrose/VectraArtifacts>
 
 ```bash
 pip install -e ".[dev]"   # adds pytest + yapf
-pip install -e ".[dace]"  # adds DaCe backend for tsvc_2_5 SDFG kernels
+```
+
+### DaCe backend (for the `tsvc_2_5` SDFG kernels)
+
+The `tsvc_2_5` kernels depend on the canonicalize + vectorization passes that
+live on the **`yakup/dev`** branch of [`spcl/dace`](https://github.com/spcl/dace),
+not yet in a tagged PyPI release. **Recommended:** clone DaCe and install it
+editable from a local path, so your DaCe edits are picked up immediately and a
+single `git pull` updates the backend:
+
+```bash
+git clone -b yakup/dev https://github.com/spcl/dace.git /path/to/dace
+pip install -e /path/to/dace   # editable DaCe checkout
+pip install -e ".[dev]"        # this repo (no [dace] — keeps your checkout)
+
+# later, to update DaCe:
+git -C /path/to/dace pull
+```
+
+Alternatively, let the `[dace]` extra pull the branch directly (no local
+checkout, but you can't edit DaCe and pip won't refetch on branch advance):
+
+```bash
+pip install -e ".[dace]"
+# the extra resolves to:
+#   dace @ git+https://github.com/spcl/dace.git@yakup/dev
+# pin a different branch/tag/commit by editing the ref in pyproject.toml, or:
+pip install -e . "dace @ git+https://github.com/spcl/dace.git@main"
+# force a refetch after the branch advances (pip caches the URL requirement):
+pip install -e ".[dace]" --force-reinstall --no-deps
 ```
 
 ## Populate the database and render the tables

@@ -9,7 +9,10 @@ shared logic so each corpus's scripts become thin entrypoints.
 Public surface (all functions accept explicit paths so the corpus
 scripts only set their own defaults):
 
-* :func:`split_cpp` -- split ``<core>.cpp`` into ``<out>/<kernel>/<kernel>_{d,f}.cpp``.
+* :func:`split_cpp` -- split ``<core>.cpp`` into ``<out>/<kernel>/<kernel>_{d,f}.cpp``
+                    (and ``_d_single`` / ``_f_single`` siblings with the
+                    outer ``for (int nl = 0; ...)`` repeat loop removed,
+                    controlled by ``emit_single``).
 * :func:`split_dace` -- split ``<core>.py`` into ``<out>/<kernel>/<kernel>_{d,f}.py``
                      (and ``_d_single`` / ``_f_single`` siblings when
                      the source carries an outer ``for nl in range(...)``

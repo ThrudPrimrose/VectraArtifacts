@@ -11,8 +11,7 @@ extern "C" {
 void s275_d(double *__restrict__ aa, const double *__restrict__ bb,
                     const double *__restrict__ cc, int iterations, int len_2d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
 
   {
     for (int nl = 0; nl < 10 * (iterations / len_2d); nl++) {
@@ -27,7 +26,7 @@ void s275_d(double *__restrict__ aa, const double *__restrict__ bb,
     }
   }
 
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   *time_ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
 }

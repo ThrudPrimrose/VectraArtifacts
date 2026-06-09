@@ -11,9 +11,8 @@ extern "C" {
 void s2101_f(float *__restrict__ aa, const float *__restrict__ bb,
                      const float *__restrict__ cc, int iterations, int len_2d,
                      std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
 
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
   {
     for (int nl = 0; nl < 10 * iterations; nl++) {
       for (int i = 0; i < len_2d; i++) {
@@ -21,7 +20,7 @@ void s2101_f(float *__restrict__ aa, const float *__restrict__ bb,
       }
     }
   }
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
 
   *time_ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();

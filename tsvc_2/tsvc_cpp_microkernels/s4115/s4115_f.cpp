@@ -11,8 +11,7 @@ extern "C" {
 void s4115_f(const float *__restrict__ a, const float *__restrict__ b,
                      const int * __restrict__ ip, float *__restrict__ result_out,
                      int iterations, int len_1d, std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
 
   float sum = 0.0f;
   for (int nl = 0; nl < iterations; ++nl) {
@@ -22,7 +21,7 @@ void s4115_f(const float *__restrict__ a, const float *__restrict__ b,
     }
   }
 
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   time_ns[0] =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
   result_out[0] = sum;

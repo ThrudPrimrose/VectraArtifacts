@@ -11,8 +11,7 @@ extern "C" {
 void s256_f(float *__restrict__ a, float *__restrict__ aa,
                     const float *__restrict__ bb, const float *__restrict__ d,
                     int iterations, int len_2d, std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
 
   {
     for (int nl = 0; nl < 10 * (iterations / len_2d); nl++) {
@@ -25,7 +24,7 @@ void s256_f(float *__restrict__ a, float *__restrict__ aa,
     }
   }
 
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   *time_ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
 }

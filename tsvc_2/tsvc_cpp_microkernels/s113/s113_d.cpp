@@ -9,8 +9,7 @@ extern "C" {
 void s113_d(double *__restrict__ a, const double *__restrict__ b,
                     const int iterations, const int len_1d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
   {
     for (int nl = 0; nl < 4 * iterations; nl++) {
       for (int i = 1; i < len_1d; i++) {
@@ -18,7 +17,7 @@ void s113_d(double *__restrict__ a, const double *__restrict__ b,
       }
     }
   }
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   std::int64_t ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
   time_ns[0] = ns;

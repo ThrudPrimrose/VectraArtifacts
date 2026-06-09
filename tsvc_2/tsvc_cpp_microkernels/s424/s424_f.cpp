@@ -15,8 +15,7 @@ extern "C" {
 void s424_f(float *__restrict__ a, const float *__restrict__ flat,
                     float *__restrict__ xx, int iterations, int len_1d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
 
   // TSVC uses: vl = 63; xx = flat_2d_array + vl;
   // Here: caller passes xx already pointing to the shifted region.
@@ -26,7 +25,7 @@ void s424_f(float *__restrict__ a, const float *__restrict__ flat,
     }
   }
 
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   time_ns[0] =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
 }
