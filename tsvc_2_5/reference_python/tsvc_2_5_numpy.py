@@ -294,3 +294,131 @@ def ref_quasi_affine_floor_div_scatter(a: np.ndarray, b: np.ndarray) -> None:
     n2 = a.shape[0]
     idx = np.arange(n2) // 2
     np.add.at(b, idx, a)
+
+
+# ---------------------------------------------------------------------------
+#  Wavefront / loop-skew
+# ---------------------------------------------------------------------------
+
+
+def ref_wavefront2d(a: np.ndarray) -> None:
+    """``a[i,j] = 0.25*(a[i,j] + a[i-1,j] + a[i,j-1] + a[i-1,j-1])``.
+    Sequential by row/column: the in-place reads of already-updated
+    neighbours make the scalar loop order significant, so the oracle
+    keeps the explicit nested sweep."""
+    n = a.shape[0]
+    for i in range(1, n):
+        for j in range(1, n):
+            a[i, j] = 0.25 * (a[i, j] + a[i - 1, j] + a[i, j - 1] + a[i - 1, j - 1])
+
+
+# ---------------------------------------------------------------------------
+#  Early-exit / find-first (break loops)
+# ---------------------------------------------------------------------------
+
+
+def ref_break_find_first(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray) -> None:
+    """TSVC ``s481``: ``if d[i] < 0: break`` then ``a[i] += b[i]*c[i]``."""
+    n = a.shape[0]
+    for i in range(n):
+        if d[i] < 0.0:
+            break
+        a[i] = a[i] + b[i] * c[i]
+
+
+def ref_break_post_body(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> None:
+    """TSVC ``s482``: ``a[i] += b[i]*c[i]`` then ``if c[i] > b[i]: break``."""
+    n = a.shape[0]
+    for i in range(n):
+        a[i] = a[i] + b[i] * c[i]
+        if c[i] > b[i]:
+            break
+
+
+def ref_break_capture(a: np.ndarray, out_index: np.ndarray, out_value: np.ndarray, k: float) -> None:
+    """TSVC ``s332``: first ``i`` with ``a[i] > k`` -> capture index +
+    value, break. ``out_index``/``out_value`` stay at ``-1`` if no
+    element exceeds ``k``."""
+    n = a.shape[0]
+    out_index[0] = -1
+    out_value[0] = -1.0
+    for i in range(n):
+        if a[i] > k:
+            out_index[0] = i
+            out_value[0] = a[i]
+            break
+
+
+# ---------------------------------------------------------------------------
+#  Conditional reduction
+# ---------------------------------------------------------------------------
+
+
+def ref_cond_reduce_sum(a: np.ndarray, out: np.ndarray) -> None:
+    """TSVC ``s3111``: ``out[0] = sum(a[a > 0])``."""
+    out[0] = float(a[a > 0.0].sum())
+
+
+def ref_cond_reduce_sym(a: np.ndarray, out: np.ndarray, k: float) -> None:
+    """Symbolic-threshold conditional sum: ``out[0] = sum(a[a > k])``."""
+    out[0] = float(a[a > k].sum())
+
+
+# ---------------------------------------------------------------------------
+#  Induction-variable closed form
+# ---------------------------------------------------------------------------
+
+
+def ref_iv_additive(out: np.ndarray, n: int) -> None:
+    """Additive IV closed form: ``out[0] = 1.5 * n``. ``n`` is the trip
+    count (the ``LEN_1D`` symbol), not derivable from ``out``'s shape."""
+    s = 0.0
+    for _ in range(n):
+        s = s + 1.5
+    out[0] = s
+
+
+def ref_iv_multiplicative(out: np.ndarray, n: int) -> None:
+    """Multiplicative IV closed form: ``out[0] = 0.99 ** n``."""
+    s = 1.0
+    for _ in range(n):
+        s = s * 0.99
+    out[0] = s
+
+
+# ---------------------------------------------------------------------------
+#  Argmax / argmin value
+# ---------------------------------------------------------------------------
+
+
+def ref_argmax_value(a: np.ndarray, out: np.ndarray) -> None:
+    """TSVC ``s314``: ``out[0] = max(a)``."""
+    out[0] = float(a.max())
+
+
+def ref_argmin_value(a: np.ndarray, out: np.ndarray) -> None:
+    """TSVC ``s316``: ``out[0] = min(a)``."""
+    out[0] = float(a.min())
+
+
+# ---------------------------------------------------------------------------
+#  Negative stride + manual unroll
+# ---------------------------------------------------------------------------
+
+
+def ref_neg_stride_rev(a: np.ndarray, b: np.ndarray) -> None:
+    """Reverse-iteration write (no carried dep): ``a[i] = b[i] + 1``."""
+    n = a.shape[0]
+    for i in range(n - 1, -1, -1):
+        a[i] = b[i] + 1.0
+
+
+def ref_reroll_saxpy4(a: np.ndarray, b: np.ndarray) -> None:
+    """TSVC ``s351``: 4x hand-unrolled saxpy. Net effect over the full
+    array is ``a[i] += b[i] * 2`` for every ``i`` (``n`` divisible by 4)."""
+    n = a.shape[0]
+    for i in range(0, n, 4):
+        a[i] = a[i] + b[i] * 2.0
+        a[i + 1] = a[i + 1] + b[i + 1] * 2.0
+        a[i + 2] = a[i + 2] + b[i + 2] * 2.0
+        a[i + 3] = a[i + 3] + b[i + 3] * 2.0

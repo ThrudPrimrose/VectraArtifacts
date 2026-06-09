@@ -4,10 +4,10 @@ Sibling of ``tsvc_2/tsvc_bindings.py`` -- same wrapper architecture
 (SIGNATURES table, ``_KernelWrapper``, ``__getattr__`` dispatch),
 re-pointed at the extension corpus's split+compile pipeline.
 
-The corpus C++ file declares 29 kernels, each with a ``<name>_d`` and
-``<name>_f`` variant; this module wires them as Python callables that
-take numpy arrays + scalars and return the per-call elapsed time in
-nanoseconds.
+The corpus C++ file declares one ``<name>_run_timed`` per kernel, each
+split into a ``<name>_d`` and ``<name>_f`` variant; this module wires
+them as Python callables that take numpy arrays + scalars and return the
+per-call elapsed time in nanoseconds.
 
 Usage::
 
@@ -129,6 +129,30 @@ SIGNATURES = {
     "quasi_affine_pairwise_sum":        [_CA("a"), _A("b"), _I("len_1d")],
     "quasi_affine_mod_k_stripe":        [_A("a"), _CA("b"), _CA("c"), _I("len_1d"), _I("k")],
     "quasi_affine_floor_div_scatter":   [_CA("a"), _A("b"), _I("len_1d")],
+
+    # %N  Wavefront / loop-skew
+    "wavefront2d":             [_A("a"), _I("len_2d")],
+
+    # %O  Early-exit / find-first (break loops)
+    "ext_break_find_first":    [_A("a"), _CA("b"), _CA("c"), _CA("d"), _I("len_1d")],
+    "ext_break_post_body":     [_A("a"), _CA("b"), _CA("c"), _I("len_1d")],
+    "ext_break_capture":       [_CA("a"), _I64A("out_index"), _A("out_value"), _I("len_1d"), _D("k")],
+
+    # %P  Conditional reduction
+    "cond_reduce_sum":         [_CA("a"), _A("out"), _I("len_1d")],
+    "cond_reduce_sym":         [_CA("a"), _A("out"), _I("len_1d"), _D("k")],
+
+    # %Q  Induction-variable closed form
+    "iv_additive":             [_A("out"), _I("len_1d")],
+    "iv_multiplicative":       [_A("out"), _I("len_1d")],
+
+    # %R  Argmax / argmin value
+    "argmax_value":            [_CA("a"), _A("out"), _I("len_1d")],
+    "argmin_value":            [_CA("a"), _A("out"), _I("len_1d")],
+
+    # %S  Negative stride + manual unroll
+    "neg_stride_rev":          [_A("a"), _CA("b"), _I("len_1d")],
+    "reroll_saxpy4":           [_A("a"), _CA("b"), _I("len_1d")],
 }
 # fmt: on
 

@@ -513,6 +513,218 @@ def quasi_affine_floor_div_scatter(a: dace.float64[2 * LEN_1D], b: dace.float64[
         b[i // 2] = b[i // 2] + a[i]
 
 
+# ==========================================================================
+#  %N  Wavefront / loop-skew (2D anti-diagonal parallelism)
+# ==========================================================================
+#
+# A perfectly-nested 2D update whose body reads the left (``a[i, j-1]``)
+# and top (``a[i-1, j]``) neighbours carries dependence vectors ``(0, 1)``
+# and ``(1, 0)``. Neither loop is parallel on its own, but the
+# anti-diagonal ``i + j = const`` is: the ``WavefrontSkew`` canonicalize
+# pass applies the classical ``(i, j) -> (i + j, j)`` skew so the inner
+# loop becomes a parallel Map. The base TSVC kernel is ``s2111``.
+
+
+@dace.program
+def wavefront2d(a: dace.float64[LEN_2D, LEN_2D]):
+    """2D in-place relaxation with left + top + corner reads:
+    ``a[i, j] = 0.25 * (a[i, j] + a[i-1, j] + a[i, j-1] + a[i-1, j-1])``.
+
+    Dependence vectors ``(0, 1)``, ``(1, 0)``, ``(1, 1)`` make both loops
+    sequential as written; only the ``i + j`` anti-diagonal is parallel,
+    so ``WavefrontSkew`` must skew before ``LoopToMap`` can fire."""
+    for i in range(1, LEN_2D):
+        for j in range(1, LEN_2D):
+            a[i, j] = 0.25 * (a[i, j] + a[i - 1, j] + a[i, j - 1] + a[i - 1, j - 1])
+
+
+# ==========================================================================
+#  %O  Early-exit / find-first (break loops)
+# ==========================================================================
+#
+# ``for i: ... if cond(i): break; ...`` loops lower to a sequential scan
+# the ``EarlyExitToFindIndex`` pass rewrites into a parallel find-first
+# reduction plus body Maps clipped to the discovered bound. Base TSVC
+# kernels: ``s481`` (guard before body), ``s482`` (guard after body),
+# ``s332`` (find-first-above-threshold with index/value capture).
+
+
+@dace.program
+def ext_break_find_first(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D],
+                         d: dace.float64[LEN_1D]):
+    """TSVC ``s481``: guard checked *before* the body. ``if d[i] < 0: break``
+    then ``a[i] = a[i] + b[i] * c[i]``. The break bound is data-dependent
+    on ``d``; the lift needs a find-first ``min`` reduction over
+    ``{i : d[i] < 0}`` before the body can run as a clipped parallel Map."""
+    for i in range(LEN_1D):
+        if d[i] < 0.0:
+            break
+        a[i] = a[i] + b[i] * c[i]
+
+
+@dace.program
+def ext_break_post_body(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D]):
+    """TSVC ``s482``: body runs *before* the guard. ``a[i] = a[i] + b[i]*c[i]``
+    then ``if c[i] > b[i]: break``. The breaking iteration's write is
+    retained, so the find-first bound is inclusive -- a different clip
+    than :func:`ext_break_find_first`."""
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[i] * c[i]
+        if c[i] > b[i]:
+            break
+
+
+@dace.program
+def ext_break_capture(a: dace.float64[LEN_1D], out_index: dace.int64[1], out_value: dace.float64[1]):
+    """TSVC ``s332`` with a symbolic threshold ``K`` (bound as a double):
+    find the first ``i`` with ``a[i] > K``, capture its index and value,
+    and break. The scalar rebind at the exit edge is what
+    ``EarlyExitToFindIndex`` must reconstruct as an argmin-of-index."""
+    out_index[0] = -1
+    out_value[0] = -1.0
+    for i in range(LEN_1D):
+        if a[i] > K:
+            out_index[0] = i
+            out_value[0] = a[i]
+            break
+
+
+# ==========================================================================
+#  %P  Conditional reduction (predicated accumulate)
+# ==========================================================================
+#
+# ``if cond(i): acc = acc OP expr`` sits inside a ConditionalBlock, so the
+# state-level ``AugAssignToWCR`` matcher cannot reach it and the carry on
+# ``acc`` blocks ``LoopToMap``. ``LoopToConditionalReduce`` masks the
+# addend with the OP identity on the false branch so the loop lifts to a
+# parallel Map with a WCR-on-scalar reduction. Base TSVC kernel: ``s3111``.
+
+
+@dace.program
+def cond_reduce_sum(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """TSVC ``s3111``: ``if a[i] > 0: out += a[i]``. Conditional ``+=``
+    accumulator; the false branch contributes the additive identity 0."""
+    out[0] = 0.0
+    for i in range(LEN_1D):
+        if a[i] > 0.0:
+            out[0] = out[0] + a[i]
+
+
+@dace.program
+def cond_reduce_sym(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """Symbolic-threshold sibling of :func:`cond_reduce_sum`:
+    ``if a[i] > K: out += a[i]`` with ``K`` bound as a double. The
+    predicate's symbolic comparison forces the mask to be computed at
+    runtime before the WCR reduction."""
+    out[0] = 0.0
+    for i in range(LEN_1D):
+        if a[i] > K:
+            out[0] = out[0] + a[i]
+
+
+# ==========================================================================
+#  %Q  Induction-variable closed form (scalar evolution)
+# ==========================================================================
+#
+# ``acc = acc OP const`` over ``N`` iterations is a scalar recurrence with
+# a closed form (Aho/Lam/Sethi/Ullman Ch. 9.6, LLVM ``IndVarSimplify``).
+# ``InductionVariableSubstitution`` collapses the ``O(N)`` loop to ``O(1)``
+# straight-line code. The addend/factor must be a literal constant (not a
+# per-element read) for the closed form to exist.
+
+
+@dace.program
+def iv_additive(out: dace.float64[1]):
+    """Additive induction variable: ``s = 0; for i in range(LEN_1D): s += 1.5``.
+    Closed form ``s = 1.5 * LEN_1D``. The trip count is the symbol
+    ``LEN_1D``; there is no per-element data, so the loop is a pure
+    recurrence the substitution eliminates."""
+    s = 0.0
+    for i in range(LEN_1D):
+        s = s + 1.5
+    out[0] = s
+
+
+@dace.program
+def iv_multiplicative(out: dace.float64[1]):
+    """Multiplicative induction variable: ``s = 1; for i: s *= 0.99``.
+    Closed form ``s = 0.99 ** LEN_1D`` -- the geometric-product case that
+    distinguishes scalar evolution from a plain reduction."""
+    s = 1.0
+    for i in range(LEN_1D):
+        s = s * 0.99
+    out[0] = s
+
+
+# ==========================================================================
+#  %R  Argmax / argmin value reduction (conditional carry -> Reduce)
+# ==========================================================================
+#
+# ``x = a[0]; for i: if a[i] OP x: x = a[i]`` is a max/min reduction hidden
+# behind a conditional scalar carry. ``ArgMaxLift`` recognises the chain
+# and replaces the loop with a ``Reduce`` libnode (``Max`` for ``>``/``>=``,
+# ``Min`` for ``<``/``<=``). Base TSVC kernels: ``s314`` / ``s316``.
+
+
+@dace.program
+def argmax_value(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """TSVC ``s314``: running maximum carried in a scalar.
+    ``x = a[0]; for i in range(1, LEN_1D): if a[i] > x: x = a[i]``.
+    ``ArgMaxLift`` rewrites this to ``Reduce(Max, a)``."""
+    x = a[0]
+    for i in range(1, LEN_1D):
+        if a[i] > x:
+            x = a[i]
+    out[0] = x
+
+
+@dace.program
+def argmin_value(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """TSVC ``s316``: running minimum sibling of :func:`argmax_value`.
+    ``x = a[0]; for i: if a[i] < x: x = a[i]`` -> ``Reduce(Min, a)``."""
+    x = a[0]
+    for i in range(1, LEN_1D):
+        if a[i] < x:
+            x = a[i]
+    out[0] = x
+
+
+# ==========================================================================
+#  %S  Negative-stride loop + manually-unrolled lane chain
+# ==========================================================================
+#
+# Two normalization anchors that block ``LoopToMap`` until rewritten:
+# ``NormalizeNegativeStride`` flips a literal negative-stride loop to
+# positive form (base TSVC ``s112``), and ``RerollUnrolledLoops`` collapses
+# a hand-unrolled step-``m`` lane chain back to a unit-step loop (base
+# TSVC ``s351``).
+
+
+@dace.program
+def neg_stride_rev(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
+    """Reverse-iteration write with no carried dependence:
+    ``for i in range(LEN_1D - 1, -1, -1): a[i] = b[i] + 1``. Parallel in
+    principle, but the negative literal stride defeats ``LoopToMap``'s
+    affine-subset classifier until ``NormalizeNegativeStride`` rewrites it
+    to positive form."""
+    for i in range(LEN_1D - 1, -1, -1):
+        a[i] = b[i] + 1.0
+
+
+@dace.program
+def reroll_saxpy4(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
+    """TSVC ``s351``: a saxpy hand-unrolled 4x. Four structurally-identical
+    lanes at offsets ``{0, 1, 2, 3}`` over a step-4 loop look like one
+    strided ``4*i + k`` access that blocks ``LoopToMap``;
+    ``RerollUnrolledLoops`` re-rolls to a unit-step loop first. Requires
+    ``LEN_1D`` divisible by 4."""
+    for i in range(0, LEN_1D, 4):
+        a[i] = a[i] + b[i] * 2.0
+        a[i + 1] = a[i + 1] + b[i + 1] * 2.0
+        a[i + 2] = a[i + 2] + b[i + 2] * 2.0
+        a[i + 3] = a[i + 3] + b[i + 3] * 2.0
+
+
 __all__ = [
     "ext_strided_load_ssym",
     "ext_strided_load_2",
@@ -548,4 +760,16 @@ __all__ = [
     "quasi_affine_pairwise_sum",
     "quasi_affine_mod_k_stripe",
     "quasi_affine_floor_div_scatter",
+    "wavefront2d",
+    "ext_break_find_first",
+    "ext_break_post_body",
+    "ext_break_capture",
+    "cond_reduce_sum",
+    "cond_reduce_sym",
+    "iv_additive",
+    "iv_multiplicative",
+    "argmax_value",
+    "argmin_value",
+    "neg_stride_rev",
+    "reroll_saxpy4",
 ]
