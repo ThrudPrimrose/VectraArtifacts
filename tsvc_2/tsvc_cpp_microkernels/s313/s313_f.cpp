@@ -11,9 +11,8 @@ extern "C" {
 void s313_f(const float *__restrict__ a, const float *__restrict__ b,
                     float *__restrict__ dot, int iterations, int len_1d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
 
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
   {
     for (int nl = 0; nl < 10 * iterations; ++nl) {
       dot[0] = 0.0f;
@@ -22,7 +21,7 @@ void s313_f(const float *__restrict__ a, const float *__restrict__ b,
       }
     }
   }
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
 
   time_ns[0] =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();

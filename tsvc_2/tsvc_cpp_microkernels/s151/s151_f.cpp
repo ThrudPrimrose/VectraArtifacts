@@ -19,14 +19,13 @@ static inline void s151s_kernel_f(float *__restrict__ a,
 void s151_f(float *__restrict__ a, const float *__restrict__ b,
                     const int iterations, const int len_1d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
   {
     for (int nl = 0; nl < 5 * iterations; ++nl) {
       s151s_kernel_f(a, b, len_1d, 1);
     }
   }
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   time_ns[0] =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
 }

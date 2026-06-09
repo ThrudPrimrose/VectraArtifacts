@@ -10,8 +10,7 @@ void s128_d(double *__restrict__ a, double *__restrict__ b,
                     const double *__restrict__ c, const double *__restrict__ d,
                     const int iterations, const int len_1d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
   {
     int j, k;
     for (int nl = 0; nl < 2 * iterations; nl++) {
@@ -24,7 +23,7 @@ void s128_d(double *__restrict__ a, double *__restrict__ b,
       }
     }
   }
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   std::int64_t ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
   time_ns[0] = ns;

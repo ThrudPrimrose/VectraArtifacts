@@ -11,9 +11,8 @@ extern "C" {
 void s318_f(const float *__restrict__ a, float *__restrict__ result,
                     int inc, int iterations, int len_1d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
 
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
   {
     int k, index;
     float maxv = 0.0f;
@@ -35,7 +34,7 @@ void s318_f(const float *__restrict__ a, float *__restrict__ result,
       result[0] = chksum;
     }
   }
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
 
   time_ns[0] =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();

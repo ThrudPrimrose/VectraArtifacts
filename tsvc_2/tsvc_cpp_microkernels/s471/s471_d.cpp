@@ -14,8 +14,7 @@ void s471_d(double *__restrict__ b, const double *__restrict__ c,
                     const double *__restrict__ d, const double *__restrict__ e,
                     double *__restrict__ x, int iterations, int len_1d,
                     std::int64_t * __restrict__ time_ns) {
-  using clock = std::chrono::high_resolution_clock;
-  auto t1 = clock::now();
+  auto t1 = clock_highres::now();
 
   int m = len_1d;
   for (int nl = 0; nl < iterations / 2; ++nl) {
@@ -26,7 +25,7 @@ void s471_d(double *__restrict__ b, const double *__restrict__ c,
     }
   }
 
-  auto t2 = clock::now();
+  auto t2 = clock_highres::now();
   time_ns[0] =
       std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
 }
