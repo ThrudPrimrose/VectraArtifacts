@@ -456,3 +456,98 @@ def ref_scan_multi_carry(a: np.ndarray, b: np.ndarray, x: np.ndarray, y: np.ndar
     for i in range(1, n):
         a[i] = a[i - 1] + x[i]
         b[i] = b[i - 1] * y[i]
+
+
+# ---------------------------------------------------------------------------
+#  Canonicalize unit-test gap kernels
+# ---------------------------------------------------------------------------
+
+
+def ref_scan_conditional(out: np.ndarray, delta: np.ndarray, mask: np.ndarray) -> None:
+    """Masked prefix scan: advance where ``mask[i] > 0``, else hold.
+    Caller seeds ``out[0]``."""
+    n = out.shape[0]
+    for i in range(1, n):
+        if mask[i] > 0:
+            out[i] = out[i - 1] + delta[i]
+        else:
+            out[i] = out[i - 1]
+
+
+def ref_scan_multi_5carry(acc: np.ndarray, delta: np.ndarray) -> None:
+    """Five independent prefix sums ``acc[r, i] = acc[r, i-1] + delta[r, i]``
+    (``acc``/``delta`` are ``(5, n)``). Caller seeds ``acc[:, 0]``."""
+    n = acc.shape[1]
+    for i in range(1, n):
+        for r in range(5):
+            acc[r, i] = acc[r, i - 1] + delta[r, i]
+
+
+def ref_argmax_with_index(a: np.ndarray, out_value: np.ndarray, out_index: np.ndarray) -> None:
+    """TSVC ``s315``: running max value + (first) index."""
+    out_value[0] = float(a.max())
+    out_index[0] = int(a.argmax())
+
+
+def ref_reroll_gather(a: np.ndarray, b: np.ndarray, ip: np.ndarray) -> None:
+    """TSVC ``s353``: 7x hand-unrolled gather saxpy. Net effect over the
+    full array is ``a[i] += b[ip[i]] * 2`` for every ``i`` (``n``
+    divisible by 7)."""
+    n = a.shape[0]
+    for i in range(0, n, 7):
+        for k in range(7):
+            a[i + k] = a[i + k] + b[ip[i + k]] * 2.0
+
+
+def ref_thomas_solve(a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray, x: np.ndarray) -> None:
+    """Tridiagonal Thomas solve: forward elimination then backward
+    substitution. ``c`` and ``d`` are overwritten as scratch; ``x`` holds
+    the solution."""
+    n = a.shape[0]
+    c[0] = c[0] / b[0]
+    d[0] = d[0] / b[0]
+    for i in range(1, n):
+        m = b[i] - a[i] * c[i - 1]
+        c[i] = c[i] / m
+        d[i] = (d[i] - a[i] * d[i - 1]) / m
+    x[n - 1] = d[n - 1]
+    for i in range(n - 2, -1, -1):
+        x[i] = d[i] - c[i] * x[i + 1]
+
+
+def ref_reduce_inner_carry(a: np.ndarray, out: np.ndarray) -> None:
+    """Row-wise reduction: ``out[i] = sum_j a[i, j]`` (outer parallel,
+    inner carried)."""
+    out[:] = a.sum(axis=1)
+
+
+def ref_config_select_branch(out_a: np.ndarray, out_b: np.ndarray, src: np.ndarray, k: int) -> None:
+    """Loop-invariant config flag selects the output array:
+    ``if k > 0: out_a = src*2 else: out_b = src+1``. The unselected output
+    is left untouched (caller pre-fills)."""
+    if k > 0:
+        out_a[:] = src * 2.0
+    else:
+        out_b[:] = src + 1.0
+
+
+def ref_move_if_data_dep_nest(out: np.ndarray, src: np.ndarray, cond: np.ndarray) -> None:
+    """Data-dependent per-row guard over a 2D nest: rows with
+    ``cond[i] > 0`` get ``out[i, :] = src[i, :] * 2``; other rows are left
+    untouched (caller pre-fills ``out``)."""
+    n = src.shape[0]
+    for i in range(n):
+        if cond[i] > 0.0:
+            out[i, :] = src[i, :] * 2.0
+
+
+def ref_fuse_move_ifs(a: np.ndarray, b: np.ndarray, src: np.ndarray, cond: np.ndarray, k: int) -> None:
+    """Two guarded nests: data-dependent ``cond[i]`` on ``a``, then
+    loop-invariant ``k`` on ``b``. Cells whose guard is false are left
+    untouched (caller pre-fills ``a`` and ``b``)."""
+    n = src.shape[0]
+    for i in range(n):
+        if cond[i] > 0.0:
+            a[i, :] = src[i, :] * 2.0
+    if k > 0:
+        b[:, :] = src + 1.0
