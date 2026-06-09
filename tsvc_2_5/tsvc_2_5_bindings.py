@@ -169,6 +169,15 @@ SIGNATURES = {
     "config_select_branch":    [_A("out_a"), _A("out_b"), _CA("src"), _I("len_1d"), _I("k")],
     "move_if_data_dep_nest":   [_A("out"), _CA("src"), _CA("cond"), _I("len_2d")],
     "fuse_move_ifs":           [_A("a"), _A("b"), _CA("src"), _CA("cond"), _I("len_2d"), _I("k")],
+
+    # %V  Transformation-test gap kernels (fusion / loop-to-map / indirect fission)
+    "fuse_stencil_through_transient": [_A("out"), _CA("a"), _I("len_1d")],
+    "fuse_diamond":               [_A("out"), _CA("a"), _I("len_1d")],
+    "loop_to_map_disjoint_strided": [_A("a"), _CA("b"), _I("len_1d")],
+    "loop_to_map_overlap_seq":    [_A("a"), _CA("b"), _I("len_1d")],
+    "loop_to_map_threshold_gather": [_A("out"), _CA("x"), _CA("y"), _CA("w"), _I64A("idx"), _I("len_2d")],
+    "fission_gather_2body":       [_A("b"), _A("e"), _CA("a"), _CA("c"), _I64A("idx"), _I("len_1d")],
+    "fission_scatter_2body":      [_A("b"), _A("e"), _CA("a"), _CA("c"), _I64A("idx"), _I("len_1d")],
 }
 # fmt: on
 

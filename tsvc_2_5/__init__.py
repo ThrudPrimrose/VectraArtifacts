@@ -153,6 +153,22 @@ _ROWS = [
     _KernelRow("fuse_move_ifs", "two guarded nests fuse after move-if-in",
                "for i: if cond[i]: for j: a..  ;  if K: for i,j: b..",
                "move both guards innermost -> identical nests fuse into one parallel Map"),
+    _KernelRow("fuse_stencil_through_transient", "non-pointwise fusion (offset correction)",
+               "tmp[i]=a[i-1]+a[i]+a[i+1]; out[i]=tmp[i]*tmp[i+1]",
+               "consumer reads transient at offset -> MapFusionVertical needs offset correction (not 1:1)"),
+    _KernelRow("fuse_diamond", "diamond fusion (shared producer, two consumers)",
+               "t=a*a; u=t+1; v=t-1; out=u*v",
+               "shared transient read by two downstream maps; fuse without duplicating the producer"),
+    _KernelRow("loop_to_map_disjoint_strided", "loop-to-map disjoint strided writes",
+               "a[2*i]=b[i]+1; a[2*i+1]=b[i]*2", "gcd disjointness proof -> LoopToMap parallelizes two-write body"),
+    _KernelRow("loop_to_map_overlap_seq", "loop-to-map overlapping writes (blocked)",
+               "a[5*i]=b[i]+1; a[3*i]=b[i]*2", "index sets collide (gcd 1) -> WAW conflict, stays sequential"),
+    _KernelRow("loop_to_map_threshold_gather", "conditional gather (cloudsc column)",
+               "if w[idx[i],k]>0.5: out[i,k]=x*2 else y+1", "per-cell threshold on gathered data; 2D LoopToMap"),
+    _KernelRow("fission_gather_2body", "indirect fission (two gathers)", "b[i]=a[idx[i]]; e[i]=c[idx[i]]",
+               "shared idx replicated per output so MapFission splits the gathers"),
+    _KernelRow("fission_scatter_2body", "indirect fission (two scatters)", "b[idx[i]]=a[i]*2; e[idx[i]]=c[i]+1",
+               "permutation idx -> fission into two independent scatter maps"),
 ]
 
 ALL_KERNELS = tuple(r.name for r in _ROWS)

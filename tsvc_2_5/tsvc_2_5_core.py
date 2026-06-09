@@ -940,6 +940,120 @@ def fuse_move_ifs(a: dace.float64[LEN_2D, LEN_2D], b: dace.float64[LEN_2D, LEN_2
                 b[i, j] = src[i, j] + 1.0
 
 
+# ==========================================================================
+#  %V  Transformation-test gap kernels (map fusion / loop-to-map / fission)
+# ==========================================================================
+#
+# Patterns drawn from the DaCe transformation tests: map fusion (vertical
+# producer-consumer + horizontal sibling), loop-to-map write-disjointness
+# certification (parallel vs sequential), a cloudsc-style conditional
+# gather, and loop fission through gather/scatter indirection.
+
+
+@dace.program
+def fuse_stencil_through_transient(out: dace.float64[LEN_1D], a: dace.float64[LEN_1D]):
+    """Non-pointwise vertical fusion (the offset-correction case). The
+    producer is a 3-point stencil ``tmp[i] = a[i-1] + a[i] + a[i+1]``; the
+    consumer reads the transient at an OFFSET: ``out[i] = tmp[i] * tmp[i+1]``.
+    Because the consumer needs ``tmp[i+1]``, the maps are not a 1:1 merge --
+    ``MapFusionVertical`` must apply offset correction (widen the producer
+    read window) before it can collapse them and drop ``tmp``. Interior
+    only; caller pre-fills the boundary cells of ``out``."""
+    tmp = np.empty(LEN_1D, dtype=np.float64)
+    for i in dace.map[1:LEN_1D - 1]:
+        tmp[i] = a[i - 1] + a[i] + a[i + 1]
+    for i in dace.map[1:LEN_1D - 2]:
+        out[i] = tmp[i] * tmp[i + 1]
+
+
+@dace.program
+def fuse_diamond(out: dace.float64[LEN_1D], a: dace.float64[LEN_1D]):
+    """Diamond producer-consumer fusion: one producer ``t = a*a`` feeds
+    TWO consumers (``u = t + 1``, ``v = t - 1``) whose results join in a
+    final map ``out = u * v``. The shared transient ``t`` is read by two
+    downstream maps, so the fuser must fuse the diamond without
+    duplicating the producer's work or serializing the two consumers --
+    harder than a linear producer-consumer chain. All three transients
+    (``t``, ``u``, ``v``) are eliminated when the diamond collapses to one
+    map."""
+    t = np.empty(LEN_1D, dtype=np.float64)
+    u = np.empty(LEN_1D, dtype=np.float64)
+    v = np.empty(LEN_1D, dtype=np.float64)
+    for i in dace.map[0:LEN_1D]:
+        t[i] = a[i] * a[i]
+    for i in dace.map[0:LEN_1D]:
+        u[i] = t[i] + 1.0
+    for i in dace.map[0:LEN_1D]:
+        v[i] = t[i] - 1.0
+    for i in dace.map[0:LEN_1D]:
+        out[i] = u[i] * v[i]
+
+
+@dace.program
+def loop_to_map_disjoint_strided(a: dace.float64[2 * LEN_1D], b: dace.float64[LEN_1D]):
+    """Two strided writes per iteration to disjoint slots ``a[2*i]`` and
+    ``a[2*i+1]``. A gcd-based disjointness proof (the two write index sets
+    never collide) lets ``LoopToMap`` parallelize despite the
+    two-writes-per-iteration shape."""
+    for i in range(LEN_1D):
+        a[2 * i] = b[i] + 1.0
+        a[2 * i + 1] = b[i] * 2.0
+
+
+@dace.program
+def loop_to_map_overlap_seq(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
+    """Counter-case to :func:`loop_to_map_disjoint_strided`: write index
+    sets ``5*i`` and ``3*i`` collide across iterations (``gcd(5, 3) = 1``),
+    so the loop carries a write-after-write conflict and ``LoopToMap`` must
+    refuse -- the result depends on sequential iteration order. Iterates to
+    ``LEN_1D // 5`` to keep both writes in range."""
+    for i in range(LEN_1D // 5):
+        a[5 * i] = b[i] + 1.0
+        a[3 * i] = b[i] * 2.0
+
+
+@dace.program
+def loop_to_map_threshold_gather(out: dace.float64[LEN_2D, LEN_2D], x: dace.float64[LEN_2D, LEN_2D],
+                                 y: dace.float64[LEN_2D, LEN_2D], w: dace.float64[LEN_2D, LEN_2D],
+                                 idx: dace.int64[LEN_2D]):
+    """cloudsc-style column physics: for each ``(i, k)`` a threshold on
+    GATHERED data ``w[idx[i], k]`` selects which elementwise update writes
+    ``out[i, k]``. Every ``(i, k)`` owns a distinct output cell, so
+    ``LoopToMap`` parallelizes the whole 2D nest even though the predicate
+    reads through the indirection ``idx``."""
+    for i in range(LEN_2D):
+        for k in range(LEN_2D):
+            if w[idx[i], k] > 0.5:
+                out[i, k] = x[i, k] * 2.0
+            else:
+                out[i, k] = y[i, k] + 1.0
+
+
+@dace.program
+def fission_gather_2body(b: dace.float64[LEN_1D], e: dace.float64[LEN_1D], a: dace.float64[LEN_1D],
+                         c: dace.float64[LEN_1D], idx: dace.int64[LEN_1D]):
+    """Two independent gathers sharing one index table: ``b[i] = a[idx[i]]``
+    and ``e[i] = c[idx[i]]``. The shared ``idx`` read normally blocks
+    ``MapFission``; the canonicalize path replicates the index read per
+    output so the two gather bodies fission into independent maps. The
+    indirect sibling of :func:`fission_indep_2body`."""
+    for i in dace.map[0:LEN_1D]:
+        b[i] = a[idx[i]]
+        e[i] = c[idx[i]]
+
+
+@dace.program
+def fission_scatter_2body(b: dace.float64[LEN_1D], e: dace.float64[LEN_1D], a: dace.float64[LEN_1D],
+                          c: dace.float64[LEN_1D], idx: dace.int64[LEN_1D]):
+    """Two independent scatters sharing a permutation index:
+    ``b[idx[i]] = a[i]*2`` and ``e[idx[i]] = c[i]+1``. Disjoint because
+    ``idx`` is a permutation, so after fission each scatter is its own
+    parallel map (guarded by the permutation proof)."""
+    for i in dace.map[0:LEN_1D]:
+        b[idx[i]] = a[i] * 2.0
+        e[idx[i]] = c[i] + 1.0
+
+
 __all__ = [
     "ext_strided_load_ssym",
     "ext_strided_load_2",
@@ -999,4 +1113,11 @@ __all__ = [
     "config_select_branch",
     "move_if_data_dep_nest",
     "fuse_move_ifs",
+    "fuse_stencil_through_transient",
+    "fuse_diamond",
+    "loop_to_map_disjoint_strided",
+    "loop_to_map_overlap_seq",
+    "loop_to_map_threshold_gather",
+    "fission_gather_2body",
+    "fission_scatter_2body",
 ]

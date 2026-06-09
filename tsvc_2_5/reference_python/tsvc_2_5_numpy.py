@@ -551,3 +551,68 @@ def ref_fuse_move_ifs(a: np.ndarray, b: np.ndarray, src: np.ndarray, cond: np.nd
             a[i, :] = src[i, :] * 2.0
     if k > 0:
         b[:, :] = src + 1.0
+
+
+# ---------------------------------------------------------------------------
+#  Transformation-test gap kernels (fusion / loop-to-map / indirect fission)
+# ---------------------------------------------------------------------------
+
+
+def ref_fuse_stencil_through_transient(out: np.ndarray, a: np.ndarray) -> None:
+    """Non-pointwise fusion: ``tmp[i] = a[i-1]+a[i]+a[i+1]`` (interior),
+    then ``out[i] = tmp[i] * tmp[i+1]`` for ``i`` in ``[1, n-2)``. Boundary
+    cells of ``out`` are left untouched (caller pre-fills)."""
+    n = a.shape[0]
+    tmp = np.empty(n)
+    for i in range(1, n - 1):
+        tmp[i] = a[i - 1] + a[i] + a[i + 1]
+    for i in range(1, n - 2):
+        out[i] = tmp[i] * tmp[i + 1]
+
+
+def ref_fuse_diamond(out: np.ndarray, a: np.ndarray) -> None:
+    """Diamond fusion result: ``t = a*a; out = (t+1) * (t-1)``."""
+    t = a * a
+    out[:] = (t + 1.0) * (t - 1.0)
+
+
+def ref_loop_to_map_disjoint_strided(a: np.ndarray, b: np.ndarray) -> None:
+    """Disjoint strided writes: ``a[2*i] = b[i] + 1``; ``a[2*i+1] = b[i] * 2``."""
+    n = b.shape[0]
+    a[0:2 * n:2] = b + 1.0
+    a[1:2 * n:2] = b * 2.0
+
+
+def ref_loop_to_map_overlap_seq(a: np.ndarray, b: np.ndarray) -> None:
+    """Overlapping writes, order-dependent: ``a[5*i] = b[i]+1``;
+    ``a[3*i] = b[i]*2`` in sequential iteration order."""
+    n = a.shape[0]
+    for i in range(n // 5):
+        a[5 * i] = b[i] + 1.0
+        a[3 * i] = b[i] * 2.0
+
+
+def ref_loop_to_map_threshold_gather(out: np.ndarray, x: np.ndarray, y: np.ndarray, w: np.ndarray,
+                                     idx: np.ndarray) -> None:
+    """Per-cell threshold on gathered ``w[idx[i], k]`` selects the update
+    for ``out[i, k]``."""
+    n = out.shape[0]
+    for i in range(n):
+        for k in range(n):
+            if w[idx[i], k] > 0.5:
+                out[i, k] = x[i, k] * 2.0
+            else:
+                out[i, k] = y[i, k] + 1.0
+
+
+def ref_fission_gather_2body(b: np.ndarray, e: np.ndarray, a: np.ndarray, c: np.ndarray, idx: np.ndarray) -> None:
+    """Two independent gathers: ``b[i] = a[idx[i]]``; ``e[i] = c[idx[i]]``."""
+    b[:] = a[idx]
+    e[:] = c[idx]
+
+
+def ref_fission_scatter_2body(b: np.ndarray, e: np.ndarray, a: np.ndarray, c: np.ndarray, idx: np.ndarray) -> None:
+    """Two independent scatters (``idx`` a permutation): ``b[idx[i]] = a[i]*2``;
+    ``e[idx[i]] = c[i]+1``."""
+    b[idx] = a * 2.0
+    e[idx] = c + 1.0
