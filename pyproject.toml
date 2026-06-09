@@ -29,7 +29,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dace = ["dace>=1.0"]
+# DaCe is pulled from the ``yakup/dev`` branch of spcl/dace (it carries the
+# canonicalize + vectorization passes the tsvc_2_5 SDFG kernels rely on,
+# which are not yet in a tagged release). To track a different branch, edit
+# the ``@yakup/dev`` ref below, or override at install time, e.g.:
+#   pip install -e . "dace @ git+https://github.com/spcl/dace.git@main"
+dace = ["dace @ git+https://github.com/spcl/dace.git@yakup/dev"]
 dev = [
     "pytest>=7",
     "pytest-xdist>=3",
