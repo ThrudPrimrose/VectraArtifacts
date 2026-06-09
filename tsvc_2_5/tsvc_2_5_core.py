@@ -712,17 +712,67 @@ def neg_stride_rev(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
 
 
 @dace.program
-def reroll_saxpy4(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
-    """TSVC ``s351``: a saxpy hand-unrolled 4x. Four structurally-identical
-    lanes at offsets ``{0, 1, 2, 3}`` over a step-4 loop look like one
-    strided ``4*i + k`` access that blocks ``LoopToMap``;
-    ``RerollUnrolledLoops`` re-rolls to a unit-step loop first. Requires
-    ``LEN_1D`` divisible by 4."""
-    for i in range(0, LEN_1D, 4):
+def reroll_saxpy7(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
+    """TSVC ``s351``: a saxpy hand-unrolled 7x. Seven structurally-identical
+    lanes at offsets ``{0..6}`` over a step-7 loop look like one strided
+    ``7*i + k`` access that blocks ``LoopToMap``; ``RerollUnrolledLoops``
+    re-rolls to a unit-step loop first. The unroll factor is deliberately
+    a **prime** (7) so it cannot coincide with any vector width -- the
+    lane chain never accidentally tiles a SIMD register, so the reroll is
+    genuinely required rather than a lucky alignment. Requires ``LEN_1D``
+    divisible by 7."""
+    for i in range(0, LEN_1D, 7):
         a[i] = a[i] + b[i] * 2.0
         a[i + 1] = a[i + 1] + b[i + 1] * 2.0
         a[i + 2] = a[i + 2] + b[i + 2] * 2.0
         a[i + 3] = a[i + 3] + b[i + 3] * 2.0
+        a[i + 4] = a[i + 4] + b[i + 4] * 2.0
+        a[i + 5] = a[i + 5] + b[i + 5] * 2.0
+        a[i + 6] = a[i + 6] + b[i + 6] * 2.0
+
+
+# ==========================================================================
+#  %T  Strided / multiple scans (prefix recurrences -> Scan libnodes)
+# ==========================================================================
+#
+# A prefix recurrence ``a[i] = a[i - stride] OP x[i]`` is the textbook
+# ``LoopToScan`` target. Two extensions force the pipeline to emit *more
+# than one* Scan libnode: a stride > 1 splits the array into independent
+# per-residue-class subsequences (one Scan each), and a body with two
+# distinct recurrences needs one Scan per carry. Base TSVC scan kernels
+# (``s242`` / ``s1221`` / ``s221``) are all single unit-stride scans.
+
+
+@dace.program
+def scan_strided_2(a: dace.float64[LEN_1D], x: dace.float64[LEN_1D]):
+    """Stride-2 prefix sum: ``a[i] = a[i-2] + x[i]``. The even- and
+    odd-indexed subsequences are two INDEPENDENT prefix sums, so
+    ``LoopToScan`` must emit two Scan libnodes (one per residue class
+    mod 2) rather than one. Caller initializes ``a[0]`` and ``a[1]``."""
+    for i in range(2, LEN_1D):
+        a[i] = a[i - 2] + x[i]
+
+
+@dace.program
+def scan_strided_sym(a: dace.float64[LEN_1D], x: dace.float64[LEN_1D]):
+    """Symbolic-stride prefix sum: ``a[i] = a[i-K] + x[i]``. Decomposes
+    into ``K`` independent prefix sums (one per residue class mod ``K``),
+    so the Scan count is a runtime symbol -- the pipeline lifts it to a
+    single stride-``K`` vector Scan. Caller initializes ``a[0..K-1]``."""
+    for i in range(K, LEN_1D):
+        a[i] = a[i - K] + x[i]
+
+
+@dace.program
+def scan_multi_carry(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], x: dace.float64[LEN_1D],
+                     y: dace.float64[LEN_1D]):
+    """Two distinct unit-stride recurrences in one loop body: an additive
+    scan on ``a`` and a multiplicative scan on ``b``. ``LoopToScan`` must
+    emit two Scan libnodes with different operators (Add and Mul) from the
+    same loop. Caller initializes ``a[0]`` and ``b[0]``."""
+    for i in range(1, LEN_1D):
+        a[i] = a[i - 1] + x[i]
+        b[i] = b[i - 1] * y[i]
 
 
 __all__ = [
@@ -771,5 +821,8 @@ __all__ = [
     "argmax_value",
     "argmin_value",
     "neg_stride_rev",
-    "reroll_saxpy4",
+    "reroll_saxpy7",
+    "scan_strided_2",
+    "scan_strided_sym",
+    "scan_multi_carry",
 ]

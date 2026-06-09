@@ -413,12 +413,46 @@ def ref_neg_stride_rev(a: np.ndarray, b: np.ndarray) -> None:
         a[i] = b[i] + 1.0
 
 
-def ref_reroll_saxpy4(a: np.ndarray, b: np.ndarray) -> None:
-    """TSVC ``s351``: 4x hand-unrolled saxpy. Net effect over the full
-    array is ``a[i] += b[i] * 2`` for every ``i`` (``n`` divisible by 4)."""
+def ref_reroll_saxpy7(a: np.ndarray, b: np.ndarray) -> None:
+    """TSVC ``s351``: 7x (prime) hand-unrolled saxpy. Net effect over the
+    full array is ``a[i] += b[i] * 2`` for every ``i`` (``n`` divisible
+    by 7)."""
     n = a.shape[0]
-    for i in range(0, n, 4):
+    for i in range(0, n, 7):
         a[i] = a[i] + b[i] * 2.0
         a[i + 1] = a[i + 1] + b[i + 1] * 2.0
         a[i + 2] = a[i + 2] + b[i + 2] * 2.0
         a[i + 3] = a[i + 3] + b[i + 3] * 2.0
+        a[i + 4] = a[i + 4] + b[i + 4] * 2.0
+        a[i + 5] = a[i + 5] + b[i + 5] * 2.0
+        a[i + 6] = a[i + 6] + b[i + 6] * 2.0
+
+
+# ---------------------------------------------------------------------------
+#  Strided / multiple scans
+# ---------------------------------------------------------------------------
+
+
+def ref_scan_strided_2(a: np.ndarray, x: np.ndarray) -> None:
+    """Stride-2 prefix sum ``a[i] = a[i-2] + x[i]``. Caller seeds
+    ``a[0]``/``a[1]``; the even/odd subsequences are two scans."""
+    n = a.shape[0]
+    for i in range(2, n):
+        a[i] = a[i - 2] + x[i]
+
+
+def ref_scan_strided_sym(a: np.ndarray, x: np.ndarray, k: int) -> None:
+    """Stride-``k`` prefix sum ``a[i] = a[i-k] + x[i]``. Caller seeds
+    ``a[0..k-1]``; the ``k`` residue classes are ``k`` scans."""
+    n = a.shape[0]
+    for i in range(k, n):
+        a[i] = a[i - k] + x[i]
+
+
+def ref_scan_multi_carry(a: np.ndarray, b: np.ndarray, x: np.ndarray, y: np.ndarray) -> None:
+    """Two scans in one body: additive on ``a``, multiplicative on ``b``.
+    Caller seeds ``a[0]``/``b[0]``."""
+    n = a.shape[0]
+    for i in range(1, n):
+        a[i] = a[i - 1] + x[i]
+        b[i] = b[i - 1] * y[i]

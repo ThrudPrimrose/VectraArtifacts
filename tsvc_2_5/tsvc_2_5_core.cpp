@@ -682,15 +682,52 @@ void neg_stride_rev_run_timed(double *__restrict__ a, const double *__restrict__
   time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
 }
 
-// reroll_saxpy4 (s351): 4x hand-unrolled saxpy over a step-4 loop
-void reroll_saxpy4_run_timed(double *__restrict__ a, const double *__restrict__ b, const int len_1d,
+// reroll_saxpy7 (s351): 7x (prime) hand-unrolled saxpy over a step-7 loop
+void reroll_saxpy7_run_timed(double *__restrict__ a, const double *__restrict__ b, const int len_1d,
                              std::int64_t *time_ns) {
   auto t1 = clock_highres::now();
-  for (int i = 0; i < len_1d; i += 4) {
+  for (int i = 0; i < len_1d; i += 7) {
     a[i] = a[i] + b[i] * 2.0;
     a[i + 1] = a[i + 1] + b[i + 1] * 2.0;
     a[i + 2] = a[i + 2] + b[i + 2] * 2.0;
     a[i + 3] = a[i + 3] + b[i + 3] * 2.0;
+    a[i + 4] = a[i + 4] + b[i + 4] * 2.0;
+    a[i + 5] = a[i + 5] + b[i + 5] * 2.0;
+    a[i + 6] = a[i + 6] + b[i + 6] * 2.0;
+  }
+  auto t2 = clock_highres::now();
+  time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+}
+
+// scan_strided_2: a[i] = a[i-2] + x[i] (stride-2 prefix sum -> two scans)
+void scan_strided_2_run_timed(double *__restrict__ a, const double *__restrict__ x, const int len_1d,
+                              std::int64_t *time_ns) {
+  auto t1 = clock_highres::now();
+  for (int i = 2; i < len_1d; ++i) {
+    a[i] = a[i - 2] + x[i];
+  }
+  auto t2 = clock_highres::now();
+  time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+}
+
+// scan_strided_sym: a[i] = a[i-k] + x[i] (stride-k prefix sum -> k scans)
+void scan_strided_sym_run_timed(double *__restrict__ a, const double *__restrict__ x, const int len_1d, const int k,
+                                std::int64_t *time_ns) {
+  auto t1 = clock_highres::now();
+  for (int i = k; i < len_1d; ++i) {
+    a[i] = a[i - k] + x[i];
+  }
+  auto t2 = clock_highres::now();
+  time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();
+}
+
+// scan_multi_carry: a[i] = a[i-1] + x[i]; b[i] = b[i-1] * y[i] (two scans, add + mul)
+void scan_multi_carry_run_timed(double *__restrict__ a, double *__restrict__ b, const double *__restrict__ x,
+                                const double *__restrict__ y, const int len_1d, std::int64_t *time_ns) {
+  auto t1 = clock_highres::now();
+  for (int i = 1; i < len_1d; ++i) {
+    a[i] = a[i - 1] + x[i];
+    b[i] = b[i - 1] * y[i];
   }
   auto t2 = clock_highres::now();
   time_ns[0] = std::chrono::duration_cast<std::chrono::nanoseconds>(t2 - t1).count();

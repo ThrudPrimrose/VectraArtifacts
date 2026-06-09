@@ -152,7 +152,12 @@ SIGNATURES = {
 
     # %S  Negative stride + manual unroll
     "neg_stride_rev":          [_A("a"), _CA("b"), _I("len_1d")],
-    "reroll_saxpy4":           [_A("a"), _CA("b"), _I("len_1d")],
+    "reroll_saxpy7":           [_A("a"), _CA("b"), _I("len_1d")],
+
+    # %T  Strided / multiple scans
+    "scan_strided_2":          [_A("a"), _CA("x"), _I("len_1d")],
+    "scan_strided_sym":        [_A("a"), _CA("x"), _I("len_1d"), _I("k")],
+    "scan_multi_carry":        [_A("a"), _A("b"), _CA("x"), _CA("y"), _I("len_1d")],
 }
 # fmt: on
 

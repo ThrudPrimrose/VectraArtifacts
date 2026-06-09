@@ -125,8 +125,14 @@ _ROWS = [
                "ArgMaxLift to Reduce(Min) libnode"),
     _KernelRow("neg_stride_rev", "negative-stride reverse loop", "for i in range(N-1, -1, -1): a[i] = b[i] + 1",
                "NormalizeNegativeStride to positive form before LoopToMap"),
-    _KernelRow("reroll_saxpy4", "manually-unrolled saxpy (4x)", "step-4 loop, 4 lanes a[i+k] += b[i+k]*2",
-               "RerollUnrolledLoops collapses lanes to unit-step before LoopToMap"),
+    _KernelRow("reroll_saxpy7", "manually-unrolled saxpy (7x, prime)", "step-7 loop, 7 lanes a[i+k] += b[i+k]*2",
+               "prime unroll factor never tiles a vector width; RerollUnrolledLoops to unit-step before LoopToMap"),
+    _KernelRow("scan_strided_2", "strided prefix scan (stride 2)", "a[i] = a[i-2] + x[i]",
+               "LoopToScan emits two Scans (even/odd residue classes)"),
+    _KernelRow("scan_strided_sym", "strided prefix scan (symbolic stride)", "a[i] = a[i-K] + x[i]",
+               "K residue classes -> stride-K vector Scan; Scan count is a runtime symbol"),
+    _KernelRow("scan_multi_carry", "two scans in one body (add + mul)", "a[i]=a[i-1]+x[i]; b[i]=b[i-1]*y[i]",
+               "LoopToScan emits two Scans with different operators"),
 ]
 
 ALL_KERNELS = tuple(r.name for r in _ROWS)
