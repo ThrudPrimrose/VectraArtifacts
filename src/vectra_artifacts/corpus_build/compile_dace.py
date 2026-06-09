@@ -11,6 +11,8 @@ import contextlib
 import importlib.util
 import os
 import pathlib
+import re
+import subprocess
 import sys
 import traceback
 from typing import List, Optional
@@ -67,7 +69,80 @@ def _suppress_fd():
         os.close(devnull)
 
 
-def _compile_one_kernel(py_file: pathlib.Path, build_dir: pathlib.Path, force: bool) -> dict:
+def _vec_report_for_dace_kernel(kernel_name: str, build_dir: pathlib.Path) -> str:
+    try:
+        from compiler_config import CXX, COMPILE_FLAGS
+    except ImportError:
+        CXX = os.environ.get("CXX", "g++")
+        COMPILE_FLAGS = ["-O3", "-std=c++17", "-fPIC"]
+
+    # Locate DaCe's include directory (contains dace/dace.h)
+    try:
+        import dace
+        dace_include = str(pathlib.Path(dace.__file__).parent / "runtime" / "include")
+    except Exception:
+        dace_include = None
+
+    cxx_lower = CXX.lower()
+    if "clang" in cxx_lower:
+        vec_flags = ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize"]
+    elif "icpx" in cxx_lower or "icpc" in cxx_lower:
+        vec_flags = ["-qopt-report=2", "-qopt-report-phase=vec"]
+    else:
+        vec_flags = ["-fopt-info-vec-all"]
+
+    kernel_dir = build_dir / kernel_name
+    cpps = sorted(kernel_dir.rglob("*.cpp"))
+    # Skip CMake compiler probe files — they aren't DaCe kernels
+    cpps = [f for f in cpps if "CMakeFiles" not in str(f)]
+    if not cpps:
+        return ""
+
+    include_flags = [f"-I{dace_include}"] if dace_include else []
+
+    outputs = []
+    for cpp in cpps:
+        try:
+            r = subprocess.run(
+                [CXX, "-c"] + list(COMPILE_FLAGS) + include_flags + vec_flags +
+                [str(cpp), "-o", os.devnull],
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if r.stderr:
+                outputs.append(r.stderr)
+        except Exception:
+            pass
+    return "\n".join(outputs)
+
+
+_VEC_RE = re.compile(
+    r"optimized: loop vectorized"  # GCC  (-fopt-info-vec)
+    r"|vectorized loop"            # Clang (-Rpass=loop-vectorize)
+    r"|LOOP AUTO-VECTORIZED",      # ICPX  (-qopt-report)
+    re.IGNORECASE,
+)
+
+
+def parse_dace_vec_reports(build_dir) -> dict:
+    """Parse all ``*.rpt`` files written by :func:`compile_dace_all` with
+    ``vec_report=True``.  Returns ``kernel_name -> bool`` (``True`` = vectorized).
+
+    Works the same way as ``parse_vec_reports`` in :mod:`compile_cpp` but
+    searches the DaCe build tree where reports are named
+    ``<kernel_stem>.rpt`` directly in *build_dir*.
+    """
+    build_dir = pathlib.Path(build_dir)
+    results = {}
+    for rpt in sorted(build_dir.glob("*.rpt")):
+        kernel = re.sub(r"_[df]$", "", rpt.stem)
+        text = rpt.read_text()
+        results[kernel] = results.get(kernel, False) or bool(_VEC_RE.search(text))
+    return results
+
+
+def _compile_one_kernel(py_file: pathlib.Path, build_dir: pathlib.Path, force: bool,
+                        vec_report: bool = False) -> dict:
     """Compile a single kernel module into ``<build_dir>/<kernel>``.
 
     Returns a result dict with ``status`` in ``{compiled, cached,
@@ -90,7 +165,7 @@ def _compile_one_kernel(py_file: pathlib.Path, build_dir: pathlib.Path, force: b
             result["error"] = "no @dace.program or SDFG found"
             return result
 
-        sdfg = prog if isinstance(prog, dace.SDFG) else prog.to_sdfg()
+        sdfg = prog if isinstance(prog, dace.SDFG) else prog.to_sdfg(simplify=False)
         sdfg.name = py_file.stem
 
         kernel_build_dir = build_dir / sdfg.name
@@ -105,6 +180,11 @@ def _compile_one_kernel(py_file: pathlib.Path, build_dir: pathlib.Path, force: b
         with _suppress_fd():
             sdfg.compile()
         result["status"] = "compiled"
+
+        if vec_report:
+            rpt_text = _vec_report_for_dace_kernel(py_file.stem, build_dir)
+            rpt_path = build_dir / f"{py_file.stem}.rpt"
+            rpt_path.write_text(rpt_text)
     except Exception as e:
         result["status"] = "failed"
         result["error"] = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
@@ -112,8 +192,8 @@ def _compile_one_kernel(py_file: pathlib.Path, build_dir: pathlib.Path, force: b
 
 
 def _compile_worker(args):
-    py_file, build_dir, force = args
-    return _compile_one_kernel(pathlib.Path(py_file), pathlib.Path(build_dir), force)
+    py_file, build_dir, force, vec_report = args
+    return _compile_one_kernel(pathlib.Path(py_file), pathlib.Path(build_dir), force, vec_report)
 
 
 def compile_dace_all(
@@ -122,9 +202,16 @@ def compile_dace_all(
     force: bool = False,
     pattern: str = "*.py",
     jobs: int = 1,
+    vec_report: bool = False,
 ) -> List[dict]:
     """Compile every kernel ``.py`` under ``root``. Returns one result
-    dict per kernel (``status``, ``error``)."""
+    dict per kernel (``status``, ``error``).
+
+    When *vec_report* is ``True`` the DaCe-generated C++ for each compiled
+    kernel is recompiled with vectorization remarks and saved as
+    ``<build_dir>/<kernel>.rpt``. Use :func:`parse_dace_vec_reports` to read
+    the results.
+    """
     root = pathlib.Path(root).resolve()
     build_dir = pathlib.Path(build_dir).resolve()
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -134,7 +221,7 @@ def compile_dace_all(
         print(f"No kernel files found under {root} with pattern '{pattern}'")
         return []
 
-    work_items = [(str(f), str(build_dir), force) for f in py_files]
+    work_items = [(str(f), str(build_dir), force, vec_report) for f in py_files]
     if jobs > 1:
         from multiprocessing import Pool
         with Pool(processes=jobs) as pool:
@@ -153,6 +240,8 @@ def main_compile_dace(default_root: str, default_build_dir: str, argv: "list | N
     ap.add_argument("-f", "--force", action="store_true")
     ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count())
     ap.add_argument("--pattern", default="*.py")
+    ap.add_argument("--vec-report", action="store_true", help="After compiling, recompile DaCe-generated C++ with vec remarks into <build_dir>/<kernel>.rpt files.")
+    ap.add_argument("--vec-report-out", default=None, metavar="FILE", help="Write the summary table to FILE (default: <build_dir>/dace.vec_report.txt when --vec-report is set).")
     args = ap.parse_args(argv)
 
     root = pathlib.Path(args.root).resolve()
@@ -164,7 +253,8 @@ def main_compile_dace(default_root: str, default_build_dir: str, argv: "list | N
                                build_dir=args.build_dir,
                                force=args.force,
                                pattern=args.pattern,
-                               jobs=args.jobs)
+                               jobs=args.jobs,
+                               vec_report=args.vec_report)
     dt = time.perf_counter() - t0
 
     compiled = sum(1 for r in results if r["status"] == "compiled")
@@ -178,5 +268,27 @@ def main_compile_dace(default_root: str, default_build_dir: str, argv: "list | N
             print(f"  SKIP: {r['stem']}: {r['error']}")
     if failed or skipped:
         print(f"\n{compiled} compiled, {cached} cached, {skipped} skipped, {failed} failed")
+
+    if args.vec_report:
+        vec_results = parse_dace_vec_reports(args.build_dir)
+        vec_count = sum(1 for v in vec_results.values() if v)
+        header = f"DaCe vectorization report: {vec_count}/{len(vec_results)} kernels vectorized"
+        lines = [header]
+        for name, vec in sorted(vec_results.items()):
+            status = "VEC" if vec else "---"
+            lines.append(f"  {status}  {name}")
+
+        report_text = "\n".join(lines) + "\n"
+        print(report_text, end="")
+
+        out_path = args.vec_report_out
+        if out_path is None:
+            out_path = pathlib.Path(args.build_dir) / "dace.vec_report.txt"
+        else:
+            out_path = pathlib.Path(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report_text)
+        print(f"Saved report -> {out_path}")
+
     print(f"Done in {dt:.1f}s")
     return 0

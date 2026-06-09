@@ -26,14 +26,16 @@ sibling that wires the same argparse the historical scripts used.
 """
 from .split_cpp import split_cpp, main_split_cpp
 from .split_dace import split_dace, main_split_dace
-from .compile_cpp import compile_cpp_library, load_cpp_library, main_compile_cpp
-from .compile_dace import compile_dace_all, main_compile_dace
+from .compile_cpp import compile_cpp_library, load_cpp_library, main_compile_cpp, parse_vec_reports
+from .compile_dace import compile_dace_all, main_compile_dace, parse_dace_vec_reports
 
 __all__ = [
     "split_cpp",
     "split_dace",
     "compile_cpp_library",
     "load_cpp_library",
+    "parse_vec_reports",
+    "parse_dace_vec_reports",
     "compile_dace_all",
     "main_split_cpp",
     "main_split_dace",
