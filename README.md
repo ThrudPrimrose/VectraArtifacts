@@ -145,6 +145,20 @@ Both corpora ship a split + compile + ctypes bindings pipeline:
 python -c "from tsvc_2_5 import ExtensionLibrary; lib = ExtensionLibrary()"
 ```
 
+## Command Flow for vectorisation report
+
+```bash
+vectra-source-sh --compiler {clang, gcc, icpx} --cost-model {default, cheap, no} --cpu apple_m_series \
+                 --out scripts/source.{name}.sh
+
+                 # cpu options: {amd_epyc, amd_epyc_genoa, apple_m_series, arm_grace, fugaku_a64fx, ibm_power, intel_xeon}
+
+source scripts/source.{name}.sh
+
+python3 -m tsvc_2.compile_cpp_kernels tsvc_2/tsvc_cpp_microkernels --vec-report --force -j6
+python3 -m tsvc_2.compile_dace_kernels tsvc_2/tsvc_dace_microkernels --vec-report --force -j6
+```
+
 ## License
 
 TSVC-2 originates from [UoB-HPC/TSVC_2](https://github.com/UoB-HPC/TSVC_2).

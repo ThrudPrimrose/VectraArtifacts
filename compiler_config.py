@@ -53,13 +53,24 @@ CXX: str = os.environ.get("CXX") or _FLAG_SET.compiler.executable()
 COMPILE_FLAGS = list(_FLAG_SET.compile_flags)
 _EXTRA = os.environ.get("EXTRA_FLAGS", "")
 if _EXTRA:
-    COMPILE_FLAGS.extend(_EXTRA.split())
+    # Only append tokens not already present to avoid duplication
+    existing = set(COMPILE_FLAGS)
+    for token in _EXTRA.split():
+        if token not in existing:
+            COMPILE_FLAGS.append(token)
+            existing.add(token)
 
 #: Link flags. ``LINK_FLAGS`` env var appends if set.
 LINK_FLAGS = list(_FLAG_SET.link_flags)
 _EXTRA_LINK = os.environ.get("LINK_FLAGS", "")
 if _EXTRA_LINK:
-    LINK_FLAGS.extend(_EXTRA_LINK.split())
+    # LINK_FLAGS.extend(_EXTRA_LINK.split())
+    # Only append tokens not already present to avoid duplication
+    existing = set(LINK_FLAGS)
+    for token in _EXTRA_LINK.split():
+        if token not in existing:
+            LINK_FLAGS.append(token)
+            existing.add(token)
 
 
 def configure_dace():

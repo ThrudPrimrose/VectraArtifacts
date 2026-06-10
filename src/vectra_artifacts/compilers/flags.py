@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import enum
 import os
+import platform
+import subprocess
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -75,6 +77,33 @@ EXECUTABLE_BY_COMPILER: Dict[Compiler, str] = {
 #: from the paper's Table 2 "Default" row + artifact baseline; the
 #: ``-march=native`` is omitted here and added at composition time so
 #: ARM hosts (``CPU_NAME=arm``) can drop it cleanly.
+def _openmp_compile_flags() -> Tuple[str, ...]:
+    """Return OpenMP compile flags appropriate for the current platform.
+    On macOS, Apple Clang requires -Xclang -fopenmp + libomp include path."""
+    if platform.system() == "Darwin":
+        try:
+            prefix = subprocess.check_output(
+                ["brew", "--prefix", "libomp"], text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            return ("-Xclang", "-fopenmp", f"-I{prefix}/include")
+        except Exception:
+            return ()   # libomp not found — skip OpenMP silently
+    return ("-fopenmp",)
+
+
+def _openmp_link_flags() -> Tuple[str, ...]:
+    """Return OpenMP link flags appropriate for the current platform."""
+    if platform.system() == "Darwin":
+        try:
+            prefix = subprocess.check_output(
+                ["brew", "--prefix", "libomp"], text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            return (f"-L{prefix}/lib", "-lomp")
+        except Exception:
+            return ()
+    return ("-fopenmp",)
+
+
 BASELINE_FLAGS: Tuple[str, ...] = (
     "-O3",
     "-std=c++17",
@@ -82,12 +111,10 @@ BASELINE_FLAGS: Tuple[str, ...] = (
     "-ffast-math",
     "-fno-math-errno",
     "-fstrict-aliasing",
-    "-fopenmp",
     "-faligned-new",
-)
+) + _openmp_compile_flags()
 
-#: Link flags shared across all combinations.
-LINK_BASE_FLAGS: Tuple[str, ...] = ("-shared", "-fopenmp")
+LINK_BASE_FLAGS: Tuple[str, ...] = ("-shared",) + _openmp_link_flags()
 
 #: Per-(compiler, cost-model) flag additions (delta on top of
 #: ``BASELINE_FLAGS``). ``vector_width`` is a placeholder substituted by
@@ -125,10 +152,16 @@ _DELTAS: Dict[Tuple[Compiler, CostModel], Tuple[str, ...]] = {
 #: already in :data:`BASELINE_FLAGS`; these add the vector libm
 #: connection. Empty tuple means "no extra flag needed; the baseline
 #: already covers it" (gcc-on-glibc, icpx-svml).
+# _MATH_FLAGS: Dict[Compiler, Tuple[str, ...]] = {
+#     Compiler.CLANG: ("-fveclib=libmvec", ),
+#     Compiler.GCC: (),  # libmvec implicit via baseline on Linux/glibc.
+#     Compiler.ICPX: (),  # SVML linked automatically with -O3 -ffast-math.
+# }
+# adding apple/Mac guards
 _MATH_FLAGS: Dict[Compiler, Tuple[str, ...]] = {
-    Compiler.CLANG: ("-fveclib=libmvec", ),
-    Compiler.GCC: (),  # libmvec implicit via baseline on Linux/glibc.
-    Compiler.ICPX: (),  # SVML linked automatically with -O3 -ffast-math.
+    Compiler.CLANG: () if platform.system() == "Darwin" else ("-fveclib=libmvec",),
+    Compiler.GCC: (),
+    Compiler.ICPX: (),
 }
 
 #: Known-SKU fallback table -- only used when both ``VEC_WIDTH`` and
