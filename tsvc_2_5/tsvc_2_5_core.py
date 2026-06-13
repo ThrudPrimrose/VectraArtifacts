@@ -721,7 +721,7 @@ def reroll_saxpy7(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
     lane chain never accidentally tiles a SIMD register, so the reroll is
     genuinely required rather than a lucky alignment. Requires ``LEN_1D``
     divisible by 7."""
-    for i in range(0, LEN_1D, 7):
+    for i in range(0, LEN_1D - 6, 7):
         a[i] = a[i] + b[i] * 2.0
         a[i + 1] = a[i + 1] + b[i + 1] * 2.0
         a[i + 2] = a[i + 2] + b[i + 2] * 2.0
@@ -838,7 +838,7 @@ def reroll_gather(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], ip: dace.int
     lanes to a unit-step loop; ``LoopToMap`` then needs the data-dependent
     gather handled. The gather variant of :func:`reroll_saxpy7`. Requires
     ``LEN_1D`` divisible by 7."""
-    for i in range(0, LEN_1D, 7):
+    for i in range(0, LEN_1D - 6, 7):
         a[i] = a[i] + b[ip[i]] * 2.0
         a[i + 1] = a[i + 1] + b[ip[i + 1]] * 2.0
         a[i + 2] = a[i + 2] + b[ip[i + 2]] * 2.0
