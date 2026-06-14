@@ -10,7 +10,7 @@ LEN_1D = dace.symbol("LEN_1D")
 LEN_2D = dace.symbol("LEN_2D")
 ITERATIONS = dace.symbol("ITERATIONS")
 S = dace.symbol("S")
-VLEN = 8
+VLEN = dace.symbol("VLEN")  # vector length (was constant 8; now a runtime symbol)
 
 
 # ==========================================================================
