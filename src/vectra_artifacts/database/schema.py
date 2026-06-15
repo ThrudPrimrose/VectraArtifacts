@@ -5,7 +5,7 @@ Six tables (plus one for schema metadata):
 * ``suites``        -- ``tsvc_2`` and ``tsvc_2_5``.
 * ``cpu_models``    -- one row per CPU SKU exercised in the sweep.
 * ``compilers``     -- ``clang`` / ``gcc`` / ``icpx``.
-* ``cost_models``   -- ``default`` / ``cheap`` / ``no``.
+* ``cost_models``   -- ``default`` / ``cheap`` / ``unlimited`` / ``disabled``.
 * ``compiler_flags`` -- the (compiler, cost-model, math) flag list,
                        seeded from :mod:`vectra_artifacts.compilers.flags`.
 * ``kernels``       -- per-(suite, name) audit row.
@@ -173,7 +173,8 @@ def seed_static_tables(conn: sqlite3.Connection) -> None:
             (CostModel.DEFAULT.value, "Baseline -O3 vector flags; no extra cost-model hint."),
             (CostModel.CHEAP.value, "Lighter cost-model variant (width hint on clang/gcc, "
              "-qopt-zmm-usage on icpx)."),
-            (CostModel.NO.value, "Vectorization disabled (-fno-vectorize / -no-vec)."),
+            (CostModel.UNLIMITED.value, "Vectorization unlimited, no reduction (-fvectorize / -vec)."),
+            (CostModel.DISABLED.value, "Vectorization disabled (-fno-vectorize / -no-vec)."),
         ],
     )
     rows: list = []

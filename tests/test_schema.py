@@ -47,9 +47,9 @@ def test_cost_models_seeded(db):
 
 
 def test_compiler_flags_seeded(db):
-    """3 compilers x 3 cost models x 2 math = 18 rows."""
+    """3 compilers x 4 cost models x 2 math = 24 rows."""
     n = db.execute("SELECT COUNT(*) FROM compiler_flags").fetchone()[0]
-    assert n == 18
+    assert n == 24
     # Spot check: clang cheap math=1 has -fveclib=libmvec, gcc cheap math=1
     # does NOT (gcc handles libmvec implicitly).
     clang_cheap_math = db.execute(
@@ -69,7 +69,7 @@ def test_seed_is_idempotent(db):
     create_schema(db)
     create_schema(db)
     n = db.execute("SELECT COUNT(*) FROM compiler_flags").fetchone()[0]
-    assert n == 18
+    assert n == 24
 
 
 def test_add_cpu_models(db):

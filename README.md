@@ -103,8 +103,8 @@ tests/                  pytest suite (106 tests)
 
 ## Compiler-flag matrix
 
-3 compilers (`clang` / `gcc` / `icpx`) x 3 cost models
-(`default` / `cheap` / `no`) x 2 math-flag values = 18 canonical
+3 compilers (`clang` / `gcc` / `icpx`) x 4 cost models
+(`default` / `cheap` / `unlimited` / `disabled`) x 2 math-flag values = 24 canonical
 combinations, documented in [`docs/VECTORIZATION_FLAGS.md`](docs/VECTORIZATION_FLAGS.md)
 and canonicalised in
 [`src/vectra_artifacts/compilers/flags.py`](src/vectra_artifacts/compilers/flags.py).
@@ -147,8 +147,13 @@ python -c "from tsvc_2_5 import ExtensionLibrary; lib = ExtensionLibrary()"
 
 ## Command Flow for vectorisation report
 
+activate venv
+specifically for me: conda activate thesis
+deactivate vevn
+conda deactivate
+
 ```bash
-vectra-source-sh --compiler {clang, gcc, icpx} --cost-model {default, cheap, no} --cpu apple_m_series \
+vectra-source-sh --compiler {clang, gcc, icpx} --cost-model {default, cheap, unlimited, disabled} --cpu apple_m_series \
                  --out scripts/source.{name}.sh
 
                  # cpu options: {amd_epyc, amd_epyc_genoa, apple_m_series, arm_grace, fugaku_a64fx, ibm_power, intel_xeon}

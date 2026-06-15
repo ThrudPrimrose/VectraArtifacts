@@ -124,7 +124,7 @@ def parse_vec_reports(build_dir) -> dict:
     for rpt in sorted(build_dir.glob("*.rpt")):
         kernel = rpt.stem  # e.g. "s111_d" -> strip _d/_f suffix below
         # Kernel files are named <name>_d.cpp / <name>_f.cpp; strip the suffix.
-        kernel = re.sub(r"_[df]$", "", kernel)
+        kernel = re.sub(r"_(d|f)(_single)?$", "", kernel)
         text = rpt.read_text()
         was_vectorized = bool(vec_re.search(text))
         # Merge double/float variants: vectorized if either was

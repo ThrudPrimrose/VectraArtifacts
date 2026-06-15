@@ -94,4 +94,4 @@ def list_cpus(conn: sqlite3.Connection) -> List[str]:
 
 
 COMPILER_ORDER: Tuple[Compiler, ...] = (Compiler.CLANG, Compiler.GCC, Compiler.ICPX)
-COST_MODEL_ORDER: Tuple[CostModel, ...] = (CostModel.DEFAULT, CostModel.CHEAP, CostModel.NO)
+COST_MODEL_ORDER: Tuple[CostModel, ...] = (CostModel.DEFAULT, CostModel.CHEAP, CostModel.UNLIMITED, CostModel.DISABLED)

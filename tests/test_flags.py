@@ -15,19 +15,38 @@ def test_baseline_subset_of_default_flags():
 
 
 def test_arm_omits_march_native():
-    """``-march=native`` is dropped for ARM cross-compiles."""
+    """`-march=native` is dropped for ARM cross-compiles."""
     fs = get_flags(Compiler.CLANG, CostModel.DEFAULT, cpu="arm")
     assert "-march=native" not in fs.compile_flags
 
 
 @pytest.mark.parametrize("compiler,expected", [
     (Compiler.CLANG, "-fno-vectorize"),
-    (Compiler.GCC, "-fno-tree-vectorize"),
-    (Compiler.ICPX, "-no-vec"),
+    (Compiler.GCC,   "-fno-tree-vectorize"),
+    (Compiler.ICPX,  "-no-vec"),
 ])
-def test_no_costmodel_disables_vectorization(compiler, expected):
-    fs = get_flags(compiler, CostModel.NO)
+def test_disabled_costmodel_disables_vectorization(compiler, expected):
+    fs = get_flags(compiler, CostModel.DISABLED)
     assert expected in fs.compile_flags
+
+
+@pytest.mark.parametrize("compiler,expected", [
+    (Compiler.CLANG, "-fno-slp-vectorize"),
+    (Compiler.GCC,   "-fno-tree-slp-vectorize"),
+    (Compiler.ICPX,  "-no-simd"),
+])
+def test_disabled_costmodel_also_disables_slp(compiler, expected):
+    """DISABLED must kill both the loop vectoriser and the SLP vectoriser."""
+    fs = get_flags(compiler, CostModel.DISABLED)
+    assert expected in fs.compile_flags
+
+
+@pytest.mark.parametrize("compiler,vec_flag,cost_flag", [
+    (Compiler.CLANG, "-fvectorize",      "-fvect-cost-model=none"),
+    (Compiler.GCC,   "-ftree-vectorize", "-fvect-cost-model=unlimited"),
+    (Compiler.ICPX,  "-vec",             "-qopt-zmm-usage=high"),
+])
+def test_unlimited_costmodel_enables_aggressive_vectorization(compiler, vec_flag, cost_flag):
 
 
 @pytest.mark.parametrize("cpu,width", [
@@ -91,9 +110,9 @@ def test_link_flags_constant():
 
 
 def test_iter_combinations_count():
-    """3 compilers x 3 cost-models = 9 sets per CPU."""
+    """3 compilers x 4 cost-models = 12 sets per CPU."""
     sets = list(iter_combinations(cpu="intel_xeon"))
-    assert len(sets) == 9
+    assert len(sets) == 12
     assert {fs.compiler for fs in sets} == set(Compiler)
     assert {fs.cost_model for fs in sets} == set(CostModel)
 

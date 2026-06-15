@@ -3,7 +3,7 @@
 Exports:
 
 * :class:`Compiler` -- the three supported compilers (clang / gcc / icpx).
-* :class:`CostModel` -- the three cost-model presets (default / cheap / no).
+* :class:`CostModel` -- the three cost-model presets (default / cheap / unlimited / disbaled ).
 * :func:`get_flags` -- look up the canonical flag list for
   ``(compiler, cost_model, math)``.
 * :func:`configure_dace` -- apply the flag set to DaCe's ``compiler.cpu.*``

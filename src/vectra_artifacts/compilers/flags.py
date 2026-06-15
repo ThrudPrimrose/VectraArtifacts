@@ -36,7 +36,8 @@ class CostModel(enum.Enum):
     """The three cost-model presets exercised by the perf grid."""
     DEFAULT = "default"  # -O3 baseline
     CHEAP = "cheap"  # lighter cost-model (width-hint or true cheap knob)
-    NO = "no"  # vectorization disabled (-fno-vectorize etc.)
+    UNLIMITED = "unlimited"  # no restrictions, vectorise if possible no matter the performance increase or decrease
+    DISABLED = "disabled"# vectorization disabled (-fno-vectorize etc.)
 
 
 class ArmAutovecPreference(enum.Enum):
@@ -77,30 +78,86 @@ EXECUTABLE_BY_COMPILER: Dict[Compiler, str] = {
 #: from the paper's Table 2 "Default" row + artifact baseline; the
 #: ``-march=native`` is omitted here and added at composition time so
 #: ARM hosts (``CPU_NAME=arm``) can drop it cleanly.
-def _openmp_compile_flags() -> Tuple[str, ...]:
-    """Return OpenMP compile flags appropriate for the current platform.
-    On macOS, Apple Clang requires -Xclang -fopenmp + libomp include path."""
+# def _openmp_compile_flags(compiler: Compiler) -> Tuple[str, ...]:
+#     if compiler is Compiler.ICPX:
+#         return ("-fiopenmp",)
+
+#     # On macOS, both g++ and clang++ are Apple Clang — same libomp path needed
+#     if platform.system() == "Darwin":
+#         try:
+#             prefix = subprocess.check_output(
+#                 ["brew", "--prefix", "libomp"], text=True,
+#                 stderr=subprocess.DEVNULL
+#             ).strip()
+#             return ("-Xclang", "-fopenmp", f"-I{prefix}/include")
+#         except Exception:
+#             return ()
+
+#     if compiler is Compiler.ICPX:
+#         return ("-fiopenmp",)
+
+#     return ("-fopenmp",)
+
+def _openmp_compile_flags(compiler: Compiler) -> Tuple[str, ...]:
+    if compiler is Compiler.ICPX:
+        return ("-fiopenmp",)
+
     if platform.system() == "Darwin":
+        if compiler is Compiler.GCC:
+            # Real GNU GCC (Homebrew g++-15) — ships its own libgomp,
+            # no libomp needed, standard -fopenmp works fine
+            return ("-fopenmp",)
+        # Apple Clang (clang++) — driver-level -fopenmp is disabled,
+        # must pass via -Xclang to reach the frontend directly
         try:
             prefix = subprocess.check_output(
-                ["brew", "--prefix", "libomp"], text=True, stderr=subprocess.DEVNULL
+                ["brew", "--prefix", "libomp"], text=True,
+                stderr=subprocess.DEVNULL
             ).strip()
             return ("-Xclang", "-fopenmp", f"-I{prefix}/include")
         except Exception:
-            return ()   # libomp not found — skip OpenMP silently
+            return ()
+
     return ("-fopenmp",)
 
 
-def _openmp_link_flags() -> Tuple[str, ...]:
-    """Return OpenMP link flags appropriate for the current platform."""
+# def _openmp_link_flags(compiler: Compiler) -> Tuple[str, ...]:
+#     """Return OpenMP link flags for the given compiler + platform."""
+#     if compiler is Compiler.ICPX:
+#         return ("-fiopenmp",)
+
+#     if compiler is Compiler.CLANG:
+#         if platform.system() == "Darwin":
+#             try:
+#                 prefix = subprocess.check_output(
+#                     ["brew", "--prefix", "libomp"], text=True,
+#                     stderr=subprocess.DEVNULL
+#                 ).strip()
+#                 return (f"-L{prefix}/lib", "-lomp")
+#             except Exception:
+#                 return ()
+#         return ("-fopenmp",)
+
+#     return ("-fopenmp",)
+
+def _openmp_link_flags(compiler: Compiler) -> Tuple[str, ...]:
+    if compiler is Compiler.ICPX:
+        return ("-fiopenmp",)
+
     if platform.system() == "Darwin":
+        if compiler is Compiler.GCC:
+            # libgomp is bundled with Homebrew GCC — linked automatically
+            return ("-fopenmp",)
+        # Apple Clang — link against Homebrew libomp explicitly
         try:
             prefix = subprocess.check_output(
-                ["brew", "--prefix", "libomp"], text=True, stderr=subprocess.DEVNULL
+                ["brew", "--prefix", "libomp"], text=True,
+                stderr=subprocess.DEVNULL
             ).strip()
             return (f"-L{prefix}/lib", "-lomp")
         except Exception:
             return ()
+
     return ("-fopenmp",)
 
 
@@ -112,13 +169,24 @@ BASELINE_FLAGS: Tuple[str, ...] = (
     "-fno-math-errno",
     "-fstrict-aliasing",
     "-faligned-new",
-) + _openmp_compile_flags()
+)
 
-LINK_BASE_FLAGS: Tuple[str, ...] = ("-shared",) + _openmp_link_flags()
+#LINK_BASE_FLAGS: Tuple[str, ...] = ("-shared",) + _openmp_link_flags()
+LINK_BASE_FLAGS: Tuple[str, ...] = ("-shared",)
 
 #: Per-(compiler, cost-model) flag additions (delta on top of
 #: ``BASELINE_FLAGS``). ``vector_width`` is a placeholder substituted by
 #: :func:`get_flags` with the resolved width.
+
+# IMPORTANT NOTES FOR PAPER::
+# -mllvm -force-vector-width=4 forces a fixed vector width (4 × 32-bit floats = 128-bit), which is what 
+# your M-series NEON supports natively. This is slightly different from "unlimited cost model" — it doesn't 
+# bypass all cost decisions, it just locks in the width and forces vectorisation to happen at that width. 
+# Document this distinction in your methodology: on Clang, UNLIMITED means "forced 128-bit vectorisation" 
+# rather than pure cost-model bypass, since -fvect-cost-model is a GCC-specific driver flag that Clang never 
+# properly exposed.
+
+
 _DELTAS: Dict[Tuple[Compiler, CostModel], Tuple[str, ...]] = {
     # ---- CLANG --------------------------------------------------------
     # Default = baseline only.
@@ -127,8 +195,10 @@ _DELTAS: Dict[Tuple[Compiler, CostModel], Tuple[str, ...]] = {
     # paper/artifacts treat ``-mprefer-vector-width=512`` as the
     # next-step-down from default. Resolved per CPU at compose time.
     (Compiler.CLANG, CostModel.CHEAP): ("-mprefer-vector-width=__VEC_WIDTH__", ),
+    # adding a new unlimited, cost model will have no affect, and simply vectorise if it is possible
+    (Compiler.CLANG, CostModel.UNLIMITED): ("-fvectorize", "-fvect-cost-model=none"),
     # Paper Table 2 "Scalar" row.
-    (Compiler.CLANG, CostModel.NO): ("-fno-vectorize", "-fno-slp-vectorize"),
+    (Compiler.CLANG, CostModel.DISABLED): ("-fno-vectorize", "-fno-slp-vectorize"),
 
     # ---- GCC ----------------------------------------------------------
     (Compiler.GCC, CostModel.DEFAULT): (),
@@ -136,16 +206,20 @@ _DELTAS: Dict[Tuple[Compiler, CostModel], Tuple[str, ...]] = {
     # parity, so default to that. The true cheap knob is enabled via
     # ``EXTRA_FLAGS=-fvect-cost-model=cheap -fsimd-cost-model=cheap``.
     (Compiler.GCC, CostModel.CHEAP): ("-mprefer-vector-width=__VEC_WIDTH__", ),
+    # adding a new unlimited, cost model will have no affect, and simply vectorise if it is possible
+    (Compiler.GCC, CostModel.UNLIMITED): ("-ftree-vectorize", "-fvect-cost-model=unlimited"),
     # Paper note: GCC scalar variant.
-    (Compiler.GCC, CostModel.NO): ("-fno-tree-vectorize", "-fno-tree-slp-vectorize"),
+    (Compiler.GCC, CostModel.DISABLED): ("-fno-tree-vectorize", "-fno-tree-slp-vectorize"),
 
     # ---- ICPX ---------------------------------------------------------
     (Compiler.ICPX, CostModel.DEFAULT): (),
     # Paper note: on Intel, width-preference becomes
     # -qopt-zmm-usage=high (512) or -qopt-ymm-usage=high (256).
     (Compiler.ICPX, CostModel.CHEAP): ("__ICPX_WIDTH_FLAG__", ),
+    # adding a new unlimited, cost model will have no affect, and simply vectorise if it is possible
+    (Compiler.ICPX, CostModel.UNLIMITED): ("-vec", "-qopt-zmm-usage=high"),
     # Artifact form (preferred over -fno-vectorize spelling).
-    (Compiler.ICPX, CostModel.NO): ("-no-vec", ),
+    (Compiler.ICPX, CostModel.DISABLED): ("-no-vec", "-no-simd"),
 }
 
 #: Math-call vectorization additions per compiler. ``-fno-math-errno`` is
@@ -341,23 +415,56 @@ def _is_aarch64_cpu(cpu: Optional[str]) -> bool:
     return cpu in _AARCH64_CPUS
 
 
+# def _rationale_for(compiler: Compiler,
+#                    cost_model: CostModel,
+#                    math: bool,
+#                    arm_autovec: Optional[ArmAutovecPreference] = None) -> str:
+#     base = {
+#         (Compiler.CLANG, CostModel.DEFAULT): "Clang -O3 baseline; paper Table 2 Default row + artifact additions.",
+#         (Compiler.CLANG, CostModel.CHEAP):
+#         "Clang -mprefer-vector-width=N (no user-facing cheap knob; width hint = paper's next step down).",
+#         (Compiler.CLANG, CostModel.UNLIMITED): "Clang -03 -fvectorize -fvect-cost-model=none"
+#         (Compiler.CLANG, CostModel.DISABLED): "Clang -fno-vectorize -fno-slp-vectorize (paper Scalar row).",
+#         (Compiler.GCC, CostModel.DEFAULT): "GCC -O3 baseline (auto-vectorize implicit at -O3).",
+#         (Compiler.GCC, CostModel.CHEAP):
+#         "GCC width hint; for the true cheap knob set EXTRA_FLAGS='-fvect-cost-model=cheap -fsimd-cost-model=cheap'.",
+#         (Compiler.GCC, CostModel.DISABLED): "GCC -fno-tree-vectorize -fno-tree-slp-vectorize.",
+#         (Compiler.ICPX, CostModel.DEFAULT): "icpx -O3 baseline (LLVM-based, accepts Clang-style flags).",
+#         (Compiler.ICPX, CostModel.CHEAP):
+#         "icpx -qopt-zmm-usage=high / -qopt-ymm-usage=high per the paper note (replaces -mprefer-vector-width=).",
+#         (Compiler.ICPX, CostModel.DISABLED): "icpx -no-vec (artifact form).",
+#     }
+#     s = base[(compiler, cost_model)]
+#     if math:
+#         if compiler == Compiler.CLANG:
+#             s += " +math: -fveclib=libmvec for sin/cos/log/exp."
+#         elif compiler == Compiler.GCC:
+#             s += " +math: libmvec implicit on glibc; -mveclibabi=svml/acml available."
+#         else:
+#             s += " +math: SVML linked automatically by icpx at -O3 -ffast-math."
+#     if arm_autovec is not None and compiler is Compiler.GCC:
+#         s += f" +arm_autovec={arm_autovec.value} (GCC --param aarch64-autovec-preference; aarch64 only)."
+#     return s
+
 def _rationale_for(compiler: Compiler,
                    cost_model: CostModel,
                    math: bool,
                    arm_autovec: Optional[ArmAutovecPreference] = None) -> str:
     base = {
-        (Compiler.CLANG, CostModel.DEFAULT): "Clang -O3 baseline; paper Table 2 Default row + artifact additions.",
-        (Compiler.CLANG, CostModel.CHEAP):
-        "Clang -mprefer-vector-width=N (no user-facing cheap knob; width hint = paper's next step down).",
-        (Compiler.CLANG, CostModel.NO): "Clang -fno-vectorize -fno-slp-vectorize (paper Scalar row).",
-        (Compiler.GCC, CostModel.DEFAULT): "GCC -O3 baseline (auto-vectorize implicit at -O3).",
-        (Compiler.GCC, CostModel.CHEAP):
-        "GCC width hint; for the true cheap knob set EXTRA_FLAGS='-fvect-cost-model=cheap -fsimd-cost-model=cheap'.",
-        (Compiler.GCC, CostModel.NO): "GCC -fno-tree-vectorize -fno-tree-slp-vectorize.",
-        (Compiler.ICPX, CostModel.DEFAULT): "icpx -O3 baseline (LLVM-based, accepts Clang-style flags).",
-        (Compiler.ICPX, CostModel.CHEAP):
-        "icpx -qopt-zmm-usage=high / -qopt-ymm-usage=high per the paper note (replaces -mprefer-vector-width=).",
-        (Compiler.ICPX, CostModel.NO): "icpx -no-vec (artifact form).",
+        (Compiler.CLANG, CostModel.DEFAULT):   "Clang -O3 baseline; paper Table 2 Default row + artifact additions.",
+        (Compiler.CLANG, CostModel.CHEAP):     "Clang -mprefer-vector-width=N (no user-facing cheap knob; width hint = paper's next step down).",
+        (Compiler.CLANG, CostModel.UNLIMITED): "Clang -O3 -fvectorize -fslp-vectorize -fvect-cost-model=none; vectorise whenever physically possible, profitability ignored.", 
+        (Compiler.CLANG, CostModel.DISABLED):  "Clang -fno-vectorize -fno-slp-vectorize; all SIMD generation suppressed (scalar baseline).",
+
+        (Compiler.GCC, CostModel.DEFAULT):   "GCC -O3 baseline (auto-vectorize implicit at -O3).",
+        (Compiler.GCC, CostModel.CHEAP):     "GCC -fvect-cost-model=cheap -fsimd-cost-model=cheap; lower profitability bar than default.",
+        (Compiler.GCC, CostModel.UNLIMITED): "GCC -ftree-vectorize -ftree-slp-vectorize -fvect-cost-model=unlimited; vectorise whenever physically possible, profitability ignored.",
+        (Compiler.GCC, CostModel.DISABLED):  "GCC -fno-tree-vectorize -fno-tree-slp-vectorize; all SIMD generation suppressed (scalar baseline).",
+
+        (Compiler.ICPX, CostModel.DEFAULT):   "icpx -O3 baseline (LLVM-based, accepts Clang-style flags).",
+        (Compiler.ICPX, CostModel.CHEAP):     "icpx -qopt-zmm-usage=high / -qopt-ymm-usage=high (replaces -mprefer-vector-width).",
+        (Compiler.ICPX, CostModel.UNLIMITED): "icpx -vec -qopt-zmm-usage=high; vectorise whenever physically possible, profitability ignored.",
+        (Compiler.ICPX, CostModel.DISABLED):  "icpx -no-vec -no-simd; all SIMD generation suppressed (scalar baseline).",
     }
     s = base[(compiler, cost_model)]
     if math:
@@ -379,52 +486,69 @@ def get_flags(compiler: Compiler,
               include_march_native: bool = True,
               arm_autovec: Optional[ArmAutovecPreference] = None,
               extra: Iterable[str] = ()) -> FlagSet:
-    """Resolve the canonical flag list for the requested combination.
 
-    :param compiler: which compiler to target.
-    :param cost_model: which cost-model preset to apply.
-    :param math: if ``True``, append the compiler's math-call
-                 vectorization flags so sin/cos/log/exp inside loops can
-                 lower to the vector libm.
-    :param cpu: optional CPU SKU name (e.g. ``intel_xeon``,
-                ``amd_epyc``). Drives the wide-width hint and is recorded
-                on the returned :class:`FlagSet` for traceability.
-    :param include_march_native: include ``-march=native`` in the
-                                 resulting flags. Set to ``False`` for
-                                 ARM cross-compiles where the paper
-                                 omits it.
-    :param arm_autovec: optional :class:`ArmAutovecPreference` to force
-                        the GCC ARM auto-vectorizer into NEON-only or
-                        SVE-only code. Emitted as
-                        ``--param=aarch64-autovec-preference=<value>``.
-                        Silently dropped when ``compiler`` is not GCC
-                        or when the resolved target is not aarch64 (so
-                        an x86 benchmark with the flag set still
-                        compiles).
-    :param extra: optional caller-supplied extra flags appended at the
-                  end (e.g. ``-fvect-cost-model=cheap`` for GCC's true
-                  cheap knob, or ``-vec-threshold0`` for icpx).
-    :returns: a frozen :class:`FlagSet` carrying compile + link flag
-              tuples and a short rationale string.
-    """
     flags: List[str] = list(BASELINE_FLAGS)
+    flags.extend(_openmp_compile_flags(compiler))
     if include_march_native and (cpu != "arm"):
         flags.append("-march=native")
     flags.extend(_DELTAS[(compiler, cost_model)])
     flags = _resolve_placeholders(flags, cpu)
+
+    # ── aarch64-specific overrides ──────────────────────────────────────
+    # These guards leave _DELTAS unchanged (x86 canonical flags stay there)
+    # and patch the resolved flag list only when we are actually targeting
+    # an aarch64 CPU. x86 hosts skip this block entirely.
+    if _is_aarch64_cpu(cpu):
+
+        if compiler is Compiler.CLANG:
+            if cost_model is CostModel.CHEAP:
+                # -mprefer-vector-width is x86-only in Clang; no aarch64
+                # equivalent exposed at the driver level — drop silently.
+                flags = [f for f in flags if not f.startswith("-mprefer-vector-width")]
+
+            elif cost_model is CostModel.UNLIMITED:
+                # -fvect-cost-model=none is unsupported on Apple Clang and
+                # on Homebrew LLVM 17+ for AArch64. Replace with a forced
+                # 128-bit vector width (4 x f32 = one NEON register).
+                flags = [f for f in flags if f != "-fvect-cost-model=none"]
+                flags.extend(["-mllvm", "-force-vector-width=4"])
+
+        elif compiler is Compiler.GCC:
+            if cost_model is CostModel.CHEAP:
+                # -mprefer-vector-width is x86-only; the GCC AArch64 equivalent
+                # is the cost-model knob directly.
+                flags = [
+                    "-fvect-cost-model=cheap" if f.startswith("-mprefer-vector-width") else f
+                    for f in flags
+                ]
+
+        # ICPX: not supported on AArch64 at all — flags pass through
+        # unchanged so the sweep can record them, but the compile will
+        # fail at the executor level (documented limitation).
+
+    # ── math libm flags ─────────────────────────────────────────────────
     if math:
         flags.extend(_MATH_FLAGS[compiler])
+
+    # ── GCC AArch64 ISA selector ─────────────────────────────────────────
     if arm_autovec is not None and compiler is Compiler.GCC and _is_aarch64_cpu(cpu):
         flags.append(f"--param=aarch64-autovec-preference={arm_autovec.value}")
+
+    # ── caller extra flags (always last) ────────────────────────────────
     flags.extend(extra)
-    return FlagSet(compiler=compiler,
-                   cost_model=cost_model,
-                   math=math,
-                   compile_flags=tuple(flags),
-                   link_flags=tuple(LINK_BASE_FLAGS),
-                   cpu=cpu,
-                   arm_autovec=arm_autovec,
-                   rationale=_rationale_for(compiler, cost_model, math, arm_autovec))
+
+    link_flags = tuple(list(LINK_BASE_FLAGS) + list(_openmp_link_flags(compiler)))
+
+    return FlagSet(
+        compiler=compiler,
+        cost_model=cost_model,
+        math=math,
+        compile_flags=tuple(flags),
+        link_flags=link_flags,
+        cpu=cpu,
+        arm_autovec=arm_autovec,
+        rationale=_rationale_for(compiler, cost_model, math, arm_autovec),
+    )
 
 
 def iter_combinations(cpu: Optional[str] = None, math: bool = False) -> Iterable[FlagSet]:

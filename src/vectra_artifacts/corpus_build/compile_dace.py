@@ -135,7 +135,8 @@ def parse_dace_vec_reports(build_dir) -> dict:
     build_dir = pathlib.Path(build_dir)
     results = {}
     for rpt in sorted(build_dir.glob("*.rpt")):
-        kernel = re.sub(r"_[df]$", "", rpt.stem)
+        # kernel = re.sub(r"_[df]$", "", rpt.stem)
+        kernel = re.sub(r"_[df](?:_(?:single|double))?$", "", rpt.stem, flags=re.IGNORECASE)
         text = rpt.read_text()
         results[kernel] = results.get(kernel, False) or bool(_VEC_RE.search(text))
     return results
