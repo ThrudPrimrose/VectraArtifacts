@@ -31,8 +31,6 @@ TSVC_VERSION_CONFIG = {
 
 
 # ── Precision patterns per (precision, tsvc_version) ──────────────────────────
-# Keys are (precision, version) tuples — NOT adjacent string literals which
-# Python silently concatenates into one string at parse time.
 _PRECISION_PATTERNS: dict = {
     ("double", "tsvc_2"):   ("*_d_single.cpp", "*_d_single.py"),
     ("float",  "tsvc_2"):   ("*_f_single.cpp", "*_f_single.py"),
@@ -57,6 +55,9 @@ examples:
   # run both float and double with tsvc_2_5
   python3 run_sweep.py --precision both --tsvc-version tsvc_2_5
 
+  # enable runtime timing
+  python3 run_sweep.py --time --reps 50
+
   # full grid on a Linux cluster
   python3 run_sweep.py --compilers clang gcc icpx --cost-models default cheap unlimited disabled --cpus intel_xeon amd_epyc
 
@@ -67,78 +68,36 @@ valid versions    : {", ".join(TSVC_VERSION_CONFIG)}
 valid precisions  : {", ".join(ALL_PRECISIONS)}
         """,
     )
-    ap.add_argument(
-        "--compilers",
-        nargs="+",
-        default=["clang"],
-        choices=ALL_COMPILERS,
-        metavar="COMPILER",
-        help=f"Compilers to sweep. Choices: {', '.join(ALL_COMPILERS)}. (default: clang)",
-    )
-    ap.add_argument(
-        "--cost-models",
-        nargs="+",
-        default=list(ALL_COST_MODELS),
-        choices=ALL_COST_MODELS,
-        metavar="MODEL",
-        help=f"Cost models to sweep. Choices: {', '.join(ALL_COST_MODELS)}. (default: all)",
-    )
-    ap.add_argument(
-        "--cpus",
-        nargs="+",
-        default=["apple_m_series"],
-        choices=ALL_CPUS,
-        metavar="CPU",
-        help=f"CPU targets to sweep. Choices: {', '.join(ALL_CPUS)}. (default: apple_m_series)",
-    )
-    ap.add_argument(
-        "--precision",
-        default="double",
-        choices=ALL_PRECISIONS,
-        help=(
-            "Which precision variants to compile. "
-            "'both' runs double and float in sequence into separate subfolders. "
-            "(default: double)"
-        ),
-    )
-    ap.add_argument(
-        "--tsvc-version",
-        default="tsvc_2",
-        choices=list(TSVC_VERSION_CONFIG),
-        metavar="VERSION",
-        help=f"TSVC version to use. Choices: {', '.join(TSVC_VERSION_CONFIG)}. (default: tsvc_2)",
-    )
-    ap.add_argument(
-        "--cpp-kernels",
-        default=None,
-        metavar="DIR",
-        help="Override C++ microkernels directory (default: version-specific, see TSVC_VERSION_CONFIG).",
-    )
-    ap.add_argument(
-        "--dace-kernels",
-        default=None,
-        metavar="DIR",
-        help="Override DaCe microkernels directory (default: version-specific, see TSVC_VERSION_CONFIG).",
-    )
-    ap.add_argument(
-        "--out-cpp",
-        default=None,
-        metavar="DIR",
-        help="Root output folder for C++ results. Defaults to results_cpp/<tsvc-version>/.",
-    )
-    ap.add_argument(
-        "--out-dace",
-        default=None,
-        metavar="DIR",
-        help="Root output folder for DaCe results. Defaults to results_dace/<tsvc-version>/.",
-    )
-    ap.add_argument(
-        "-j", "--jobs",
-        default=6,
-        type=int,
-        metavar="N",
-        help="Parallel compile jobs (default: 6).",
-    )
+    ap.add_argument("--compilers", nargs="+", default=["clang"], choices=ALL_COMPILERS,
+                    metavar="COMPILER",
+                    help=f"Compilers to sweep. Choices: {', '.join(ALL_COMPILERS)}. (default: clang)")
+    ap.add_argument("--cost-models", nargs="+", default=list(ALL_COST_MODELS), choices=ALL_COST_MODELS,
+                    metavar="MODEL",
+                    help=f"Cost models to sweep. Choices: {', '.join(ALL_COST_MODELS)}. (default: all)")
+    ap.add_argument("--cpus", nargs="+", default=["apple_m_series"], choices=ALL_CPUS,
+                    metavar="CPU",
+                    help=f"CPU targets to sweep. Choices: {', '.join(ALL_CPUS)}. (default: apple_m_series)")
+    ap.add_argument("--precision", default="double", choices=ALL_PRECISIONS,
+                    help="Which precision variants to compile. 'both' runs double and float. (default: double)")
+    ap.add_argument("--tsvc-version", default="tsvc_2", choices=list(TSVC_VERSION_CONFIG),
+                    metavar="VERSION",
+                    help=f"TSVC version to use. Choices: {', '.join(TSVC_VERSION_CONFIG)}. (default: tsvc_2)")
+    ap.add_argument("--cpp-kernels", default=None, metavar="DIR",
+                    help="Override C++ microkernels directory.")
+    ap.add_argument("--dace-kernels", default=None, metavar="DIR",
+                    help="Override DaCe microkernels directory.")
+    ap.add_argument("--out-cpp", default=None, metavar="DIR",
+                    help="Root output folder for C++ results. Defaults to results_cpp/<tsvc-version>/.")
+    ap.add_argument("--out-dace", default=None, metavar="DIR",
+                    help="Root output folder for DaCe results. Defaults to results_dace/<tsvc-version>/.")
+    ap.add_argument("-j", "--jobs", default=6, type=int, metavar="N",
+                    help="Parallel compile jobs (default: 6).")
+    ap.add_argument("--time", action="store_true",
+                    help="Enable runtime timing after each compile step.")
+    ap.add_argument("--reps", type=int, default=100, metavar="N",
+                    help="Timing repetitions per kernel when --time is set (default: 30).")
+    ap.add_argument("--len-1d", type=int, default=1024, metavar="N", dest="len_1d",
+                    help="Array length used during timing (default: 1024).")
     return ap.parse_args()
 
 
@@ -160,9 +119,6 @@ def run_precision_sweep(
         )
     pattern_cpp, pattern_dace = _PRECISION_PATTERNS[key]
 
-    # When running both precisions, nest under a precision subfolder:
-    #   results_cpp/tsvc_2/double/clang_apple_m_series_default/
-    #   results_cpp/tsvc_2/float/clang_apple_m_series_default/
     if args.precision == "both":
         output_cpp  = base_cpp  / precision
         output_dace = base_dace / precision
@@ -222,16 +178,24 @@ def run_precision_sweep(
         cpp_out_dir.mkdir(parents=True, exist_ok=True)
         cpp_build_dir.mkdir(parents=True, exist_ok=True)
 
-        result_cpp = subprocess.run([
+        cpp_cmd = [
             "python3", "-m", f"{tsvc_module}.compile_cpp_kernels",
             cpp_kernels,
             "-b", str(cpp_build_dir),
             "--pattern", pattern_cpp,
             "--vec-report",
             "--vec-report-out", str(cpp_out_dir / "vec_report.txt"),
-            "--force", f"-j{args.jobs}"
-        ], capture_output=True, text=True, env=env)
+            "--force", f"-j{args.jobs}",
+        ]
+        if args.time:
+            cpp_cmd += [
+                "--time",
+                "--reps", str(args.reps),
+                "--len-1d", str(args.len_1d),
+                "--timing-out", str(cpp_out_dir / "timing_report.csv"),
+            ]
 
+        result_cpp = subprocess.run(cpp_cmd, capture_output=True, text=True, env=env)
         (cpp_out_dir / "stdout.txt").write_text(result_cpp.stdout)
         (cpp_out_dir / "stderr.txt").write_text(result_cpp.stderr)
         print(f"  CPP  {'OK' if result_cpp.returncode == 0 else 'FAILED'} — {cpp_out_dir}/")
@@ -242,16 +206,24 @@ def run_precision_sweep(
         dace_out_dir.mkdir(parents=True, exist_ok=True)
         dace_build_dir.mkdir(parents=True, exist_ok=True)
 
-        result_dace = subprocess.run([
+        dace_cmd = [
             "python3", "-m", f"{tsvc_module}.compile_dace_kernels",
             dace_kernels,
             "-b", str(dace_build_dir),
             "--pattern", pattern_dace,
             "--vec-report",
             "--vec-report-out", str(dace_out_dir / "vec_report.txt"),
-            "--force", f"-j{args.jobs}"
-        ], capture_output=True, text=True, env=env)
+            "--force", f"-j{args.jobs}",
+        ]
+        if args.time:
+            dace_cmd += [
+                "--time",
+                "--reps", str(args.reps),
+                "--len-1d", str(args.len_1d),
+                "--timing-out", str(dace_out_dir / "timing_report.csv"),
+            ]
 
+        result_dace = subprocess.run(dace_cmd, capture_output=True, text=True, env=env)
         (dace_out_dir / "stdout.txt").write_text(result_dace.stdout)
         (dace_out_dir / "stderr.txt").write_text(result_dace.stderr)
         print(f"  DaCe {'OK' if result_dace.returncode == 0 else 'FAILED'} — {dace_out_dir}/")
@@ -277,6 +249,7 @@ def main():
     print(f"Cost models  : {args.cost_models}")
     print(f"CPUs         : {args.cpus}")
     print(f"Precision    : {args.precision}")
+    print(f"Timing       : {'enabled — ' + str(args.reps) + ' reps, len_1d=' + str(args.len_1d) if args.time else 'disabled (pass --time to enable)'}")
 
     precisions = ["double", "float"] if args.precision == "both" else [args.precision]
 
