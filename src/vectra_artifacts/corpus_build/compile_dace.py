@@ -1,419 +1,284 @@
-"""Compile per-kernel DaCe ``.py`` files into per-kernel SDFG ``.so``.
+#!/usr/bin/env python3
+"""compile_dace.py — compile and time DaCe TSVC-2 kernels."""
 
-Each kernel file under ``microkernels_dace/<kernel>/<kernel>_d.py``
-exports one ``@dace.program``; we import it, convert to an SDFG, and
-compile under an isolated build folder. Multiprocessing is used per
-file because DaCe's compile path is CPU-heavy and the GIL-bound work
-inside it serializes thread pools poorly.
-"""
+from __future__ import annotations
+
 import argparse
-import contextlib
+import ast
+import base64
 import ctypes
+import fnmatch
 import importlib.util
-import os
+import json
+import multiprocessing
 import pathlib
+import pickle
 import re
 import statistics
 import subprocess
 import sys
-import traceback
+import tempfile
 import time as _time
-from typing import List, Optional
+import os
+from typing import Optional
 
 import numpy as np
 
-# ── ctypes shorthands ──────────────────────────────────────────────────────────
+# ── ctypes pointer aliases ─────────────────────────────────────────────────────
 _dp   = ctypes.POINTER(ctypes.c_double)
 _fp   = ctypes.POINTER(ctypes.c_float)
 _ip   = ctypes.POINTER(ctypes.c_int)
 _i64p = ctypes.POINTER(ctypes.c_int64)
 
-# ── Hardcoded bindings paths ───────────────────────────────────────────────────
-_BINDINGS_MAP = {
-    "tsvc_2": pathlib.Path(
-        "/Users/alexbonsall/Desktop/ETH/Semester_Thesis/VectraArtifacts"
-        "/tsvc_2/tsvc_bindings.py"
-    ),
-    "tsvc_2_5": pathlib.Path(
-        "/Users/alexbonsall/Desktop/ETH/Semester_Thesis/VectraArtifacts"
-        "/tsvc_2_5/tsvc_2_5_bindings.py"
-    ),
-}
 
-# ── Internal helpers ───────────────────────────────────────────────────────────
+# ── SIGNATURES loader ──────────────────────────────────────────────────────────
+def _load_signatures(root: pathlib.Path):
+    """Infer the correct bindings file from 'tsvc_2_5' or 'tsvc_2' in root."""
+    import importlib.util
 
-def _import_module_from_path(py_file: pathlib.Path):
-    """Import a ``.py`` file as a module without polluting ``sys.modules``."""
-    spec = importlib.util.spec_from_file_location(py_file.stem, str(py_file))
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load spec for {py_file}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    root_str = str(root)
 
-
-def _find_dace_program(mod):
-    """Return ``(name, program)`` for the kernel exposed by the module."""
-    import dace
-    candidates = []
-    for name in dir(mod):
-        if name.startswith("_"):
-            continue
-        obj = getattr(mod, name)
-        if hasattr(obj, "to_sdfg") or isinstance(obj, dace.SDFG):
-            candidates.append((name, obj))
-    if len(candidates) == 1:
-        return candidates[0]
-    for cname, cobj in candidates:
-        if cname == mod.__name__ or cname == mod.__name__.removesuffix("_d").removesuffix("_f"):
-            return (cname, cobj)
-    return candidates[0] if candidates else (None, None)
-
-
-@contextlib.contextmanager
-def _suppress_fd():
-    """Silence OS-level stdout/stderr (catches CMake / clang output)."""
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    old_stdout = os.dup(1)
-    old_stderr = os.dup(2)
-    try:
-        os.dup2(devnull, 1)
-        os.dup2(devnull, 2)
-        yield
-    finally:
-        os.dup2(old_stdout, 1)
-        os.dup2(old_stderr, 2)
-        os.close(old_stdout)
-        os.close(old_stderr)
-        os.close(devnull)
-
-
-def _vec_report_for_dace_kernel(kernel_name: str, build_dir: pathlib.Path) -> str:
-    try:
-        from compiler_config import CXX, COMPILE_FLAGS
-    except ImportError:
-        CXX = os.environ.get("CXX", "g++")
-        COMPILE_FLAGS = ["-O3", "-std=c++17", "-fPIC"]
-
-    try:
-        import dace
-        dace_include = str(pathlib.Path(dace.__file__).parent / "runtime" / "include")
-    except Exception:
-        dace_include = None
-
-    cxx_lower = CXX.lower()
-    if "clang" in cxx_lower:
-        vec_flags = ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize"]
-    elif "icpx" in cxx_lower or "icpc" in cxx_lower:
-        vec_flags = ["-qopt-report=2", "-qopt-report-phase=vec"]
+    # Check tsvc_2_5 first — it must come before tsvc_2 because tsvc_2_5
+    # also contains the substring "tsvc_2".
+    if "tsvc_2_5" in root_str:
+        bindings_rel = "tsvc_2_5/tsvc_2_5_bindings.py"
+    elif "tsvc_2" in root_str:
+        bindings_rel = "tsvc_2/tsvc_bindings.py"
     else:
-        vec_flags = ["-fopt-info-vec-all"]
+        print(f"  [timing] ERROR: cannot infer TSVC version from root path: {root}",
+              flush=True)
+        return None
 
-    kernel_dir = build_dir / kernel_name
-    cpps = sorted(kernel_dir.rglob("*.cpp"))
-    cpps = [f for f in cpps if "CMakeFiles" not in str(f)]
-    if not cpps:
-        return ""
+    # Anchor the bindings file relative to cwd (where the user runs the script from)
+    bindings_path = pathlib.Path.cwd() / bindings_rel
 
-    include_flags = [f"-I{dace_include}"] if dace_include else []
-    outputs = []
-    for cpp in cpps:
-        try:
-            r = subprocess.run(
-                [CXX, "-c"] + list(COMPILE_FLAGS) + include_flags + vec_flags +
-                [str(cpp), "-o", os.devnull],
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            if r.stderr:
-                outputs.append(r.stderr)
-        except Exception:
-            pass
-    return "\n".join(outputs)
+    if not bindings_path.exists():
+        print(f"  [timing] ERROR: bindings file not found: {bindings_path}", flush=True)
+        return None
 
+    spec = importlib.util.spec_from_file_location("_tsvc_bindings_tmp", bindings_path)
+    mod  = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    sigs = getattr(mod, "SIGNATURES", None)
 
-_VEC_RE = re.compile(
-    r"optimized: loop vectorized"
-    r"|vectorized loop"
-    r"|LOOP AUTO-VECTORIZED",
-    re.IGNORECASE,
-)
+    if not sigs:
+        print(f"  [timing] ERROR: no SIGNATURES found in {bindings_path}", flush=True)
+        return None
+
+    print(f"  location of signature to load:  {bindings_path}", flush=True)
+    return sigs
 
 
-def parse_dace_vec_reports(build_dir) -> dict:
-    """Parse all ``*.rpt`` files. Returns ``kernel_name -> bool``."""
-    build_dir = pathlib.Path(build_dir)
-    results = {}
-    for rpt in sorted(build_dir.glob("*.rpt")):
-        kernel = re.sub(r"_[df](?:_(?:single|double))?$", "", rpt.stem, flags=re.IGNORECASE)
-        text = rpt.read_text()
-        results[kernel] = results.get(kernel, False) or bool(_VEC_RE.search(text))
-    return results
-
-# ── Compile helpers ────────────────────────────────────────────────────────────
-
-def _compile_one_kernel(py_file: pathlib.Path, build_dir: pathlib.Path, force: bool,
-                        vec_report: bool = False) -> dict:
-    """Compile a single kernel module into ``<build_dir>/<kernel>``."""
-    import dace
-    from compiler_config import configure_dace
-    configure_dace()
-
-    if "CC" not in os.environ:
-        os.environ["CC"] = "gcc"
-    if "CXX" not in os.environ:
-        os.environ["CXX"] = "g++"
-
-    result = {"file": str(py_file), "stem": py_file.stem, "status": "unknown", "error": None}
-    try:
-        mod = _import_module_from_path(py_file)
-        name, prog = _find_dace_program(mod)
-        if prog is None:
-            result["status"] = "skipped"
-            result["error"] = "no @dace.program or SDFG found"
-            return result
-
-        sdfg = prog if isinstance(prog, dace.SDFG) else prog.to_sdfg(simplify=False)
-        sdfg.name = py_file.stem
-
-        kernel_build_dir = build_dir / sdfg.name
-        kernel_build_dir.mkdir(parents=True, exist_ok=True)
-        sdfg.build_folder = str(kernel_build_dir)
-
-        so_path = kernel_build_dir / sdfg.name / "build" / f"lib{sdfg.name}.so"
-        if not force and so_path.exists():
-            result["status"] = "cached"
-            return result
-
-        with _suppress_fd():
-            sdfg.compile()
-        result["status"] = "compiled"
-
-        if vec_report:
-            rpt_text = _vec_report_for_dace_kernel(py_file.stem, build_dir)
-            rpt_path = build_dir / f"{py_file.stem}.rpt"
-            rpt_path.write_text(rpt_text)
-    except Exception as e:
-        result["status"] = "failed"
-        result["error"] = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
-    return result
+# ── DaCe signature overrides removed ─────────────────────────────────────────
+# Signature matching is handled purely via the pool: every parameter name that
+# appears in SIGNATURES must have a corresponding entry in _make_array_pool().
+# To fix a SKIP, add the missing key to the pool — do not filter signatures.
 
 
-def _compile_worker(args):
-    py_file, build_dir, force, vec_report = args
-    return _compile_one_kernel(pathlib.Path(py_file), pathlib.Path(build_dir), force, vec_report)
-
-
-def compile_dace_all(
-    root,
-    build_dir,
-    force: bool = False,
-    pattern: str = "*.py",
-    jobs: int = 1,
-    vec_report: bool = False,
-) -> List[dict]:
-    """Compile every kernel ``.py`` under ``root``. Returns one result dict per kernel."""
-    root = pathlib.Path(root).resolve()
-    build_dir = pathlib.Path(build_dir).resolve()
-    build_dir.mkdir(parents=True, exist_ok=True)
-
-    py_files = sorted(
-        f for f in root.rglob(pattern)
-        if f.name != "__init__.py" and not f.name.startswith("_")
-    )
-    if not py_files:
-        print(f"No kernel files found under {root} with pattern '{pattern}'")
-        return []
-
-    work_items = [(str(f), str(build_dir), force, vec_report) for f in py_files]
-    if jobs > 1:
-        from multiprocessing import Pool
-        with Pool(processes=jobs) as pool:
-            results = pool.map(_compile_worker, work_items)
-    else:
-        results = [_compile_worker(item) for item in work_items]
-    return results
-
-# ── Timing phase ───────────────────────────────────────────────────────────────
-
-def _infer_tsvc_version_from_path(build_dir: pathlib.Path) -> str:
-    """Infer tsvc_2 vs tsvc_2_5 from any part of the build_dir path."""
-    for part in build_dir.parts:
-        if part == "tsvc_2_5":
-            return "tsvc_2_5"
-        if part == "tsvc_2":
-            return "tsvc_2"
-    return "tsvc_2"
-
-
-def _infer_precision_from_pattern(pattern: str) -> str:
-    if "_f_single" in pattern or re.search(r"\*_f\.py$", pattern):
-        return "float"
-    return "double"
-
-
+# ── Array pool ─────────────────────────────────────────────────────────────────
 def _make_array_pool(len_1d: int, is_float: bool) -> dict:
-    """Allocate named arrays covering all SIGNATURES params for both corpora."""
     dtype  = np.float32 if is_float else np.float64
-    len_2d = max(4, int(len_1d ** 0.5))
-    len_3d = max(4, int(len_1d ** (1/3)))
     rng    = np.random.default_rng(42)
+    SSYM   = 4
+    S_TILE = 32
+    T_TILE = 32
+
+    dim_2d  = min(len_1d, 4096)
+    arr_2d  = rng.random((dim_2d, dim_2d)).astype(dtype)
+    dim_3d  = 32
+    arr_3d  = rng.random((dim_3d, dim_3d, dim_3d)).astype(dtype)
+    idx_arr = np.mod(np.arange(len_1d, dtype=np.int64) * 7 + 3, len_1d)
+
     return {
-        "a":         rng.random(len_1d).astype(dtype),
-        "b":         rng.random(len_1d).astype(dtype),
-        "c":         rng.random(len_1d).astype(dtype),
-        "d":         rng.random(len_1d).astype(dtype),
-        "e":         rng.random(len_1d).astype(dtype),
-        "x":         rng.random(len_1d).astype(dtype),
-        "y":         rng.random(len_1d).astype(dtype),
-        "z":         rng.random(len_1d).astype(dtype),
-        "q":         rng.random(len_1d).astype(dtype),
-        "src":       rng.random(len_1d).astype(dtype),
-        "dst":       np.zeros(len_1d, dtype=dtype),
-        "out":       np.zeros(len_1d, dtype=dtype),
+        "a": arr_2d.ravel(), "b": arr_2d.ravel().copy(),
+        "c": rng.random(len_1d).astype(dtype),
+        "d": rng.random(len_1d).astype(dtype),
+        "e": rng.random(len_1d).astype(dtype),
+        "f": rng.random(len_1d).astype(dtype),
+        "g": rng.random(len_1d).astype(dtype),
+        "h": rng.random(len_1d).astype(dtype),
+        "u": rng.random(len_1d).astype(dtype),
+        "v": rng.random(len_1d).astype(dtype),
+        "w": rng.random(len_1d).astype(dtype),
+        "x": rng.random(len_1d).astype(dtype),
+        "y": rng.random(len_1d).astype(dtype),
+        "z": rng.random(len_1d).astype(dtype),
+        # tsvc_2 uses aa/bb/cc as 2D arrays: aa[len_2d][len_1d]
+        # Must be len_2d * len_1d elements to avoid out-of-bounds SIGSEGV
+        "aa": rng.random(dim_2d * len_1d).astype(dtype),
+        "bb": rng.random(dim_2d * len_1d).astype(dtype),
+        "cc": rng.random(dim_2d * len_1d).astype(dtype),
+        "dd": rng.random(dim_2d * len_1d).astype(dtype),
+        "xx": rng.random(len_1d).astype(dtype),
+        "p": rng.random(len_1d).astype(dtype),
+        "q": rng.random(len_1d).astype(dtype),
+        "r": rng.random(len_1d).astype(dtype),
+        "in_": rng.random(len_1d).astype(dtype),
+        "src": rng.random(len_1d).astype(dtype),
+        "dst": rng.random(SSYM * len_1d).astype(dtype),
+        "out": np.zeros(1, dtype=dtype),
         "threshold_data": rng.random(len_1d).astype(dtype),
-        "aa":        rng.random(len_2d * len_2d).astype(dtype),
-        "bb":        rng.random(len_2d * len_2d).astype(dtype),
-        "cc":        rng.random(len_2d * len_2d).astype(dtype),
-        "flat":      rng.random(len_1d * len_2d).astype(dtype),
-        "flat_2d_array": rng.random(len_2d * len_2d).astype(dtype),
-        "xx":        rng.random(len_1d).astype(dtype),
-        "result":    np.zeros(1, dtype=dtype),
-        "result_out":np.zeros(1, dtype=dtype),
-        "sum_out":   np.zeros(1, dtype=dtype),
-        "dot":       np.zeros(1, dtype=dtype),
-        "dot_out":   np.zeros(1, dtype=dtype),
-        "ip":        rng.integers(0, len_1d, size=len_1d, dtype=np.int32),
-        "indx":      rng.integers(0, len_1d, size=len_1d, dtype=np.int32),
-        "idx":       rng.integers(0, len_1d, size=len_1d, dtype=np.int64),
-        "mask":      rng.integers(0, 2,       size=len_1d, dtype=np.int64),
-        "iterations": 1,
-        "len_1d":    len_1d,
-        "len_2d":    len_2d,
-        "len_3d":    len_3d,
-        "vlen":      min(8, len_2d),
-        "inc":       1,
-        "n1":        1,
-        "n3":        len_1d - 1,
-        "k":         len_1d // 2,
-        "M":         len_1d // 4,
-        "threshold": 0,
-        "j":         0,
-        "ssym":      4,
-        "m":         4,
-        "t":         4,
-        "t1":        4,
-        "t2":        4,
-        "s":         1.0,
-        "s1":        1.0,
-        "s2":        2.0,
-        "scale":     1.0,
+        "a_2d": arr_2d.ravel(), "b_2d": arr_2d.ravel().copy(),
+        "a_3d": arr_3d.ravel(), "b_3d": arr_3d.ravel().copy(),
+        "ip": idx_arr.copy(), "idx": idx_arr.copy(),
+        "index": idx_arr.copy(), "ind": idx_arr.copy(),
+        "mask": rng.integers(0, 2, size=len_1d, dtype=np.int64),
+        "scale": 1.0, "alpha": 1.0, "beta": 0.5, "gamma": 0.25,
+        "s": 1.0, "t": 1.0,
+        "n": len_1d, "m": len_1d,
+        "len_1d": len_1d, "LEN_1D": len_1d,
+        "LEN_2D": dim_2d, "LEN_3D": dim_3d,
+        "len_2d": dim_2d, "len_3d": dim_3d,
+        "ntimes": len_1d, "iterations": len_1d,
+        "K": 1, "k": 1, "k1": 1, "k2": len_1d // 4,
+        "SSYM": SSYM, "ssym": SSYM,
+        "S": S_TILE, "T": T_TILE,
+        "s_tile": S_TILE, "t_tile": T_TILE, "tile_size": T_TILE,
+        "stride": 4, "offset": 1, "wrap_size": len_1d,
+        "nx": dim_3d, "ny": dim_3d, "nz": dim_3d, "nt": 2,
+        # jacobi2d_double_tiled_sym_d: two symbolic tile sizes
+        "t1": 64,
+        "t2": 8,
+        # tsvc_2 missing scalars
+        "vlen": 8,
+        "n1": 1,
+        "n3": len_1d - 1,
+        "inc": 1,
+        "M": len_1d // 4,
+        "s1": 1.0,
+        "s2": 2.0,
+        "threshold": 0.5,
+        "j": 0,
+        # tsvc_2 reduction output scalars
+        "sum_out": np.zeros(1, dtype=dtype),
+        "result": np.zeros(1, dtype=dtype),
+        "result_out": np.zeros(1, dtype=dtype),
+        "dot": np.zeros(1, dtype=dtype),
+        "dot_out": np.zeros(1, dtype=dtype),
+        # tsvc_2 flat 2D arrays — must be dim_2d * dim_2d (square) since
+        # kernels like s125 index up to LEN_2D*LEN_2D-1
+        "flat": rng.random(dim_2d * dim_2d).astype(dtype),
+        "flat_2d_array": rng.random(dim_2d * dim_2d).astype(dtype),
+        # tsvc_2 integer index array (int32)
+        "indx": np.mod(
+            np.arange(len_1d, dtype=np.int32) * 7 + 3, len_1d
+        ).astype(np.int32),
     }
 
 
-def _load_signatures(build_dir: pathlib.Path) -> Optional[dict]:
-    """Load SIGNATURES from the hardcoded bindings file matching the build path."""
-    tsvc_version  = _infer_tsvc_version_from_path(build_dir)
-    bindings_path = _BINDINGS_MAP[tsvc_version]
+# ── ctypes helpers ─────────────────────────────────────────────────────────────
+def _is_pointer_ctype(ct) -> bool:
+    name = getattr(ct, "__name__", "") or ""
+    return name.startswith("LP_") or hasattr(ct, "contents") or ct in (_dp, _fp, _ip, _i64p)
 
-    if not bindings_path.exists():
-        print(f"  [timing] SKIP — bindings not found: {bindings_path}")
-        return None
-
-    spec     = importlib.util.spec_from_file_location(f"{tsvc_version}.bindings", bindings_path)
-    bindings = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(bindings)
-    except Exception as exc:
-        print(f"  [timing] SKIP — failed to load {bindings_path}: {exc}")
-        return None
-
-    print(f"  [timing] Using SIGNATURES from {bindings_path} ({len(bindings.SIGNATURES)} kernels)")
-    return bindings.SIGNATURES
-
-
-def _find_dylib(kdir: pathlib.Path, stem: str) -> Optional[pathlib.Path]:
-    """
-    Find the pre-built shared library for a DaCe kernel without triggering
-    a recompile.  DaCe places it at:
-      <kdir>/build/lib<stem>.dylib   (macOS)
-      <kdir>/build/lib<stem>.so      (Linux)
-    """
-    build = kdir / "build"
-    for ext in (".dylib", ".so"):
-        p = build / f"lib{stem}{ext}"
-        if p.exists():
-            return p
-    return None
-
+def _is_int64_ctype(ct) -> bool:
+    name = getattr(ct, "__name__", "") or ""
+    return name in ("LP_c_long", "LP_c_int64", "LP_c_longlong") or ct is _i64p
 
 def _array_to_ptr(arr: np.ndarray, ctype_d, is_float: bool):
-    """Cast a numpy array to the correct ctypes pointer type."""
-    if ctype_d is _i64p:
-        return arr.astype(np.int64, copy=False).ctypes.data_as(_i64p)
-    if arr.dtype == np.int32:
-        return arr.ctypes.data_as(_ip)
+    ct_name = getattr(ctype_d, "__name__", "") or ""
+    if _is_int64_ctype(ctype_d):
+        return arr.astype(np.int64, copy=False).ctypes.data_as(ctypes.POINTER(ctypes.c_int64))
+    if ctype_d is _ip or ct_name in ("LP_c_int", "LP_c_int32"):
+        return arr.astype(np.int32, copy=False).ctypes.data_as(_ip)
     if is_float:
         a = arr.astype(np.float32) if arr.dtype != np.float32 else arr
         return a.ctypes.data_as(_fp)
     a = arr.astype(np.float64) if arr.dtype != np.float64 else arr
     return a.ctypes.data_as(_dp)
 
-
 def _build_dace_ctypes_args(sig, pool: dict, is_float: bool):
-    """
-    Build a ctypes arg list for the DaCe __dace_run_<stem> symbol.
-    DaCe-generated run functions accept the same array/scalar arguments
-    as the original kernel, prepended by a void* state handle.
-    Returns (call_args, ) or None if any param is missing.
-    Note: the state handle is prepended by the caller.
-    """
-    call_args = []
+    call_args, keep_alive = [], []
     for pname, ctype_d, ctype_f in sig:
         val = pool.get(pname)
         if val is None:
-            return None
-        if isinstance(val, np.ndarray):
+            return None, None
+        if _is_pointer_ctype(ctype_d):
+            if not isinstance(val, np.ndarray):
+                if _is_int64_ctype(ctype_d):
+                    val = np.array([int(val)], dtype=np.int64)
+                elif (getattr(ctype_d, "__name__", "") or "").startswith("LP_c_int"):
+                    val = np.array([int(val)], dtype=np.int32)
+                elif is_float:
+                    val = np.array([float(val)], dtype=np.float32)
+                else:
+                    val = np.array([float(val)], dtype=np.float64)
+                keep_alive.append(val)
             call_args.append(_array_to_ptr(val, ctype_d, is_float))
-        elif isinstance(val, float):
-            call_args.append(ctypes.c_float(val) if is_float else ctypes.c_double(val))
         else:
-            call_args.append(ctypes.c_int(int(val)))
-    return call_args
+            # Use the sig's declared ctype directly so 32-bit vs 64-bit scalars
+            # match the compiled ABI exactly (c_int vs c_int64 vs c_double etc.)
+            ct = ctype_f if is_float else ctype_d
+            try:
+                buf = ct(float(val) if 'double' in ct.__name__ or 'float' in ct.__name__ else int(val))
+            except Exception:
+                buf = ctypes.c_int64(int(val))  # safe fallback
+            keep_alive.append(buf)
+            call_args.append(buf)
+    return call_args, keep_alive
 
 
+# ── Source-order helper ────────────────────────────────────────────────────────
+def _sig_order_from_source(py_path: pathlib.Path, base: str) -> "list[str] | None":
+    try:
+        tree = ast.parse(py_path.read_text())
+    except (SyntaxError, OSError):
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in (
+            base, f"{base}_d", f"{base}_f", f"{base}_d_single", f"{base}_f_single"
+        ):
+            return [a.arg for a in node.args.args]
+    return None
+
+def _find_dylib(kdir: pathlib.Path, stem: str) -> Optional[pathlib.Path]:
+    """
+    Find the pre-built dacestub shared library for a DaCe kernel.
+
+    Both tsvc_2 and tsvc_2_5 use the same modular layout:
+        <kdir>/build/<stem>_<stem>_<hash>/build/libdacestub_<stem>_<stem>.dylib
+    """
+    build = kdir / "build"
+    if not build.is_dir():
+        return None
+
+    candidates: list[pathlib.Path] = []
+    for sub in build.iterdir():
+        if not sub.is_dir() or not sub.name.startswith(f"{stem}_"):
+            continue
+        sub_build = sub / "build"
+        if not sub_build.is_dir():
+            continue
+        for ext in (".dylib", ".so"):
+            stub = sub_build / f"libdacestub_{stem}_{stem}{ext}"
+            if stub.exists():
+                candidates.append(stub)
+
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+# ── Timing phase ───────────────────────────────────────────────────────────────
 def run_dace_timing_phase(
     build_dir: pathlib.Path,
     out_path: pathlib.Path,
     pattern: str,
     reps: int,
     len_1d: int,
+    src_root: "pathlib.Path | None" = None,
+    debug_kernel: "str | None" = None,
 ) -> None:
-    """
-    Walk *build_dir* for compiled DaCe kernel folders, load each pre-built
-    shared library directly (no recompile), and time the ``__dace_run_<stem>``
-    symbol *reps* times.  Writes ``timing_report.csv`` to *out_path*.
-
-    DaCe kernel folder layout:
-      <build_dir>/<stem>/
-        build/
-          lib<stem>.dylib  (macOS) / lib<stem>.so  (Linux)  <- loaded here
-        src/               <- generated C++ (not touched)
-        program.sdfgz      <- SDFG definition  (not loaded here)
-
-    DaCe-generated shared libraries export three symbols:
-      void* __dace_init_<stem>()                <- allocates state; called once
-      void  __program_<stem>(void* state, args...)  <- timed hot loop
-      void  __dace_exit_<stem>(void* state)         <- frees state
-    """
-    SIGNATURES = _load_signatures(build_dir)
+    SIGNATURES = _load_signatures(src_root)
     if SIGNATURES is None:
         return
 
-    is_float = _infer_precision_from_pattern(pattern) == "float"
+    is_float = bool(re.search(r"_f(_single)?\.py$", pattern))
     pool     = _make_array_pool(len_1d, is_float)
-    rows     = []
-    skipped  = 0
+    rows: list[tuple] = []
+    skipped = 0
+
+    kernel_src_files: list[pathlib.Path] = []
+    if src_root is not None and src_root.is_dir():
+        kernel_src_files = list(src_root.glob("**/*.py"))
 
     kernel_dirs = sorted(
         d for d in build_dir.iterdir()
@@ -422,14 +287,38 @@ def run_dace_timing_phase(
     print(f"  [timing] Found {len(kernel_dirs)} compiled DaCe kernel folders")
 
     for kdir in kernel_dirs:
-        stem = kdir.name                                # e.g. "s111_d_single"
-        base = re.sub(r"_(d|f)(_single)?$", "", stem)  # e.g. "s111"
+        stem = kdir.name
+        base = re.sub(r"_(d|f)(_single)?$", "", stem)
 
-        sig = SIGNATURES.get(base)
+        sig = None
+        for candidate in [
+            stem,
+            re.sub(r"_(d|f)(_single)?$", "", stem),
+            re.sub(r"_d_single$", "_single", stem),
+            re.sub(r"_f_single$", "_single", stem),
+            re.sub(r"_(double|float|single)$", "", stem),
+        ]:
+            sig = SIGNATURES.get(candidate)
+            if sig is not None:
+                base = candidate
+                break
+
         if sig is None:
-            print(f"  [timing] SKIP {stem} — not in SIGNATURES (base={base!r})")
+            available = sorted(SIGNATURES.keys())[:10]
+            print(f"  [timing] SKIP {stem} — not in SIGNATURES. Sample keys: {available}")
             skipped += 1
             continue
+
+        src_py = next(
+            (p for p in kernel_src_files if p.stem == stem or p.stem == base), None
+        )
+        if src_py is not None:
+            src_order = _sig_order_from_source(src_py, base)
+            if src_order is not None:
+                sig_by_name = {pname: (pname, ct_d, ct_f) for pname, ct_d, ct_f in sig}
+                reordered  = [sig_by_name[p] for p in src_order if p in sig_by_name]
+                reordered += [e for e in sig if e[0] not in {p for p in src_order}]
+                sig = reordered
 
         dylib = _find_dylib(kdir, stem)
         if dylib is None:
@@ -444,64 +333,185 @@ def run_dace_timing_phase(
             skipped += 1
             continue
 
-        # Resolve DaCe init / run / exit symbols.
-        # nm shows the linker adds one leading underscore on macOS, so ctypes
-        # strips that automatically — look up without the extra underscore:
-        #   ___dace_init_<stem>  -> "__dace_init_<stem>"   (init/exit)
-        #   ___program_<stem>    -> "__program_<stem>"      (the hot kernel)
-        try:
-            fn_init = getattr(lib, f"__dace_init_{stem}")
-            fn_exit = getattr(lib, f"__dace_exit_{stem}")
-        except AttributeError as exc:
-            print(f"  [timing] SKIP {stem} — init/exit symbol missing: {exc}")
-            skipped += 1
-            continue
-
-        # The run function is __program_<stem> (not __dace_run_<stem>)
-        fn_run = None
-        for sym in [f"__program_{stem}", f"__dace_run_{stem}", stem]:
-            try:
-                fn_run = getattr(lib, sym)
-                break
-            except AttributeError:
-                continue
-        if fn_run is None:
+        init_sym     = f"__dace_init_{stem}"
+        exit_sym     = f"__dace_exit_{stem}"
+        run_sym_name = f"__program_{stem}"
+        if run_sym_name is None:
             print(f"  [timing] SKIP {stem} — run symbol not found")
             skipped += 1
             continue
 
-        call_args = _build_dace_ctypes_args(sig, pool, is_float)
+        call_args, _keep = _build_dace_ctypes_args(sig, pool, is_float)
         if call_args is None:
-            print(f"  [timing] SKIP {stem} — unresolved arg in pool")
+            missing = [p for p, _, _ in sig if pool.get(p) is None]
+            print(f"  [timing] SKIP {stem} — unresolved arg(s): {missing}")
             skipped += 1
             continue
 
-        fn_init.restype = ctypes.c_void_p
-        fn_run.restype  = None
-        fn_exit.restype = None
+        print(f"  [timing] running {stem} ...", end=" ", flush=True)
+
+        # Resolve libomp path early so child_lines can reference it
+        _conda_prefix = pathlib.Path(sys.executable).parent.parent
+        _libomp = next((
+            str(p) for p in [
+                _conda_prefix / "lib" / "libomp.dylib",
+                _conda_prefix / "lib" / "libiomp5.dylib",
+                pathlib.Path("/opt/homebrew/opt/libomp/lib/libomp.dylib"),
+                pathlib.Path("/opt/homebrew/lib/libomp.dylib"),
+                pathlib.Path("/usr/local/lib/libomp.dylib"),
+                _conda_prefix / "lib" / "libiomp5.so",
+                _conda_prefix / "lib" / "libomp.so",
+                pathlib.Path("/usr/lib/x86_64-linux-gnu/libomp.so.5"),
+                pathlib.Path("/usr/lib/aarch64-linux-gnu/libomp.so.5"),
+            ] if p.exists()
+        ), None)
+
+        # Serialise the *raw* numpy/scalar pool values (not ctypes objects).
+        # The child process rebuilds ctypes args from scratch using the same helpers.
+        dylib_str    = str(dylib)
+        init_sym     = f"__dace_init_{stem}"
+        exit_sym     = f"__dace_exit_{stem}"
+        module_path  = str(pathlib.Path(__file__).resolve())
+
+        # Extract only the pool keys this kernel needs, as plain numpy/scalars
+        raw_pool = {}
+        for pname, _, _ in sig:
+            v = pool.get(pname)
+            if v is not None:
+                raw_pool[pname] = v
+
+        # Serialise sig as (pname, dtype_name_d, dtype_name_f) so ctypes aren't pickled
+        def _ctype_name(ct):
+            return getattr(ct, "__name__", None) or repr(ct)
+        sig_serial = [(pname, _ctype_name(ct_d), _ctype_name(ct_f)) for pname, ct_d, ct_f in sig]
+
+        pool_b64   = base64.b64encode(pickle.dumps(raw_pool)).decode()
+        sig_b64    = base64.b64encode(pickle.dumps(sig_serial)).decode()
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        tmp.close()
+        tmp_path = tmp.name
+
+        child_lines = [
+            # Preload libomp with RTLD_GLOBAL FIRST, before any other imports,
+            # so OMP symbols are globally visible when the kernel .dylib loads.
+            "import ctypes as _ctypes_early",
+            "for _omp_path in [" + repr(str(_libomp)) + "]:",
+            "    if _omp_path and _omp_path != 'None':",
+            "        try: _ctypes_early.CDLL(_omp_path, mode=_ctypes_early.RTLD_GLOBAL)",
+            "        except OSError: pass",
+            "import ctypes, statistics, time as _t, json, pathlib, pickle, base64, sys, importlib.util",
+            # Load the parent module so we can reuse _is_pointer_ctype, _array_to_ptr etc.
+            "spec = importlib.util.spec_from_file_location('_cdace', " + repr(module_path) + ")",
+            "mod  = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(mod)",
+            "import numpy as np",
+            "raw_pool   = pickle.loads(base64.b64decode(" + repr(pool_b64) + "))",
+            "sig_serial = pickle.loads(base64.b64decode(" + repr(sig_b64) + "))",
+            "is_float   = " + repr(is_float),
+            # Reconstruct sig with real ctypes
+            "_CMAP = {",
+            "    'LP_c_double': ctypes.POINTER(ctypes.c_double),",
+            "    'LP_c_float':  ctypes.POINTER(ctypes.c_float),",
+            "    'LP_c_int':    ctypes.POINTER(ctypes.c_int),",
+            "    'LP_c_long':   ctypes.POINTER(ctypes.c_int64),",
+            "    'LP_c_int64':  ctypes.POINTER(ctypes.c_int64),",
+            "    'LP_c_longlong': ctypes.POINTER(ctypes.c_int64),",
+            "    'c_double': ctypes.c_double,",
+            "    'c_float':  ctypes.c_float,",
+            "    'c_int':    ctypes.c_int,",
+            "    'c_int64':  ctypes.c_int64,",
+            "    'c_long':   ctypes.c_int64,",
+            "    'c_int32':  ctypes.c_int32,",
+            "}",
+            "sig = [(pn, _CMAP.get(cdn, ctypes.c_int64), _CMAP.get(cfn, ctypes.c_int64))",
+            "       for pn, cdn, cfn in sig_serial]",
+            "call_args, keep = mod._build_dace_ctypes_args(sig, raw_pool, is_float)",
+            "if call_args is None:",
+            "    raise RuntimeError('missing pool args in child')",
+            # Load library and run
+            "lib = ctypes.CDLL(" + repr(dylib_str) + ")",
+            "fn_init = getattr(lib, " + repr(init_sym) + ")",
+            "fn_run  = getattr(lib, " + repr(run_sym_name) + ")",
+            "fn_exit = getattr(lib, " + repr(exit_sym) + ")",
+            "fn_init.restype = ctypes.c_void_p",
+            "fn_run.restype  = None",
+            "fn_exit.restype = None",
+            "print('[child] sig:', [(p, cd, cf) for p,cd,cf in sig_serial])",
+            "print('[child] pool keys:', list(raw_pool.keys()))",
+            "print('[child] call_args types:', [type(a).__name__ for a in call_args])",
+            "import sys as _sys; _sys.stdout.flush()",
+            "handle = fn_init()",
+            "h = ctypes.c_void_p(handle)",
+            "timings = []",
+            "for _ in range(" + str(reps) + "):",
+            "    t0 = _t.perf_counter_ns()",
+            "    fn_run(h, *call_args)",
+            "    timings.append(_t.perf_counter_ns() - t0)",
+            "fn_exit(h)",
+            "result = dict(median=statistics.median(timings), min=min(timings),",
+            "              stdev=statistics.stdev(timings) if " + str(reps) + ">1 else 0.0)",
+            "pathlib.Path(" + repr(tmp_path) + ").write_text(json.dumps(result))",
+        ]
+        child_script = "\n".join(child_lines)
+
+        # Write child script to a temp file — avoids OSError "Argument list too long"
+        # when base64-encoded pool data makes the -c string exceed OS limits.
+        tmp_script = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
+        tmp_script.write(child_script)
+        tmp_script.close()
+
+        child_env = {**os.environ, "OMP_NUM_THREADS": "1", "KMP_DUPLICATE_LIB_OK": "TRUE"}
+        # DYLD_INSERT_LIBRARIES (macOS) / LD_PRELOAD (Linux) — best effort only
+        if _libomp:
+            if sys.platform == "darwin":
+                child_env.setdefault("DYLD_INSERT_LIBRARIES", _libomp)
+            else:
+                child_env.setdefault("LD_PRELOAD", _libomp)
+
+        # --debug-kernel: save script to /tmp for manual inspection and skip running
+        if debug_kernel and (stem == debug_kernel or base == debug_kernel):
+            debug_path = f"/tmp/dace_debug_{stem}.py"
+            pathlib.Path(debug_path).write_text(child_script)
+            print(f"\n  [debug] Child script saved to: {debug_path}")
+            print(f"  [debug] Run manually with:")
+            print(f"  [debug]   python3 {debug_path}")
+            print(f"  [debug] Or for crash details:")
+            print(f"  [debug]   OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE python3 {debug_path}")
+            skipped += 1
+            continue
+
+        proc = subprocess.run(
+            [sys.executable, tmp_script.name],
+            timeout=60,
+            capture_output=True,
+            text=True,
+            env=child_env,
+        )
+        try:
+            pathlib.Path(tmp_script.name).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        if proc.returncode != 0:
+            err_lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+            err_tail  = " | ".join(err_lines[-3:]) if err_lines else ""
+            print(f"CRASH (exit {proc.returncode}){(': ' + err_tail) if err_tail else ''}", flush=True)
+            skipped += 1
+        else:
+            try:
+                result = json.loads(pathlib.Path(tmp_path).read_text())
+                print("ok", flush=True)
+                rows.append((base, result["median"], result["min"], result["stdev"]))
+            except Exception as exc:
+                print(f"failed reading result: {exc}", flush=True)
+                skipped += 1
 
         try:
-            # __dace_init takes no args on this DaCe version (returns state ptr)
-            handle     = fn_init()
-            handle_arg = ctypes.c_void_p(handle)
-
-            timings = []
-            for _ in range(reps):
-                t0 = _time.perf_counter_ns()
-                fn_run(handle_arg, *call_args)
-                timings.append(_time.perf_counter_ns() - t0)
-
-            fn_exit(handle_arg)
-
-            rows.append((
-                base,
-                statistics.median(timings),
-                min(timings),
-                statistics.stdev(timings) if reps > 1 else 0.0,
-            ))
-        except Exception as exc:
-            print(f"  [timing] SKIP {stem} — call failed: {exc}")
-            skipped += 1
+            pathlib.Path(tmp_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+        del _keep
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["kernel,median_ns,min_ns,stdev_ns"]
@@ -510,92 +520,168 @@ def run_dace_timing_phase(
     out_path.write_text("\n".join(lines) + "\n")
     print(f"  [timing] {len(rows)} kernels timed, {skipped} skipped -> {out_path}")
 
-# ── main_compile_dace ──────────────────────────────────────────────────────────
 
-def main_compile_dace(default_root: str, default_build_dir: str, argv: "list | None" = None) -> int:
-    """Argparse wrapper used by ``tsvc_2/`` and ``tsvc_2_5/`` entry points."""
-    ap = argparse.ArgumentParser(description="Compile per-kernel DaCe .py SDFGs in parallel.")
-    ap.add_argument("root",          nargs="?", default=default_root)
-    ap.add_argument("-b", "--build-dir",        default=default_build_dir)
-    ap.add_argument("-f", "--force",            action="store_true")
-    ap.add_argument("-j", "--jobs",             type=int, default=os.cpu_count())
-    ap.add_argument("--pattern",               default="*.py")
-    ap.add_argument("--vec-report",            action="store_true",
-                    help="Recompile DaCe-generated C++ with vec remarks into <build_dir>/<kernel>.rpt files.")
-    ap.add_argument("--vec-report-out",        default=None, metavar="FILE",
-                    help="Write vec summary to FILE (default: <build_dir>/dace.vec_report.txt).")
-    ap.add_argument("--time",                  action="store_true",
-                    help="After compiling, load each kernel SDFG and time it.")
-    ap.add_argument("--timing-out",            default=None, metavar="FILE",
-                    help="Write timing CSV to FILE (default: <build_dir>/dace.timing_report.csv).")
-    ap.add_argument("--reps",                  type=int, default=30, metavar="N",
-                    help="Timing repetitions per kernel (default: 30).")
-    ap.add_argument("--len-1d",                type=int, default=1024, metavar="N",
-                    dest="len_1d",
-                    help="Array length used during timing (default: 1024).")
+# ── Compilation helpers ────────────────────────────────────────────────────────
+def _compile_one(args_tuple):
+    py_file, build_dir, force = args_tuple
+    stem      = py_file.stem
+    kdir      = build_dir / stem
+    sdfg_path = kdir / "program.sdfgz"
+
+    if sdfg_path.exists() and not force:
+        return stem, True, "cached"
+
+    kdir.mkdir(parents=True, exist_ok=True)
+    script_lines = [
+        "import sys, pathlib, dace, importlib.util",
+        "kdir = pathlib.Path(" + repr(str(kdir)) + ")",
+        "kdir.mkdir(parents=True, exist_ok=True)",
+        "dace.config.Config.set('default_build_folder', value=str(kdir / 'build'))",
+        "spec = importlib.util.spec_from_file_location(" + repr(stem) + ", " + repr(str(py_file)) + ")",
+        "mod  = importlib.util.module_from_spec(spec)",
+        "spec.loader.exec_module(mod)",
+        "prog = next(",
+        "    (getattr(mod, a) for a in dir(mod)",
+        "     if not a.startswith('_') and hasattr(getattr(mod, a, None), 'to_sdfg')),",
+        "    None,",
+        ")",
+        "if prog is None:",
+        "    raise RuntimeError('no @dace.program found')",
+        "sdfg = prog.to_sdfg()",
+        "sdfg.save(str(kdir / 'program.sdfgz'))",
+        "sdfg.compile()",
+    ]
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "\n".join(script_lines)],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip().splitlines()
+            return stem, False, err[-1] if err else "unknown error"
+        return stem, True, "compiled"
+    except subprocess.TimeoutExpired:
+        return stem, False, "timeout"
+    except Exception as exc:
+        return stem, False, str(exc)
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
+def compile_dace_all(
+    src_root: "str | pathlib.Path",
+    build_dir: "str | pathlib.Path",
+    pattern: str = "*.py",
+    force: bool = False,
+    jobs: int = 0,
+) -> dict:
+    src_root  = pathlib.Path(src_root).resolve()
+    build_dir = pathlib.Path(build_dir).resolve()
+    j = jobs if jobs > 0 else multiprocessing.cpu_count()
+    all_py = sorted(src_root.glob("**/*.py"))
+    kernel_files = [
+        f for f in all_py
+        if fnmatch.fnmatch(f.name, pattern) and not f.name.startswith("_")
+    ]
+    work = [(f, build_dir, force) for f in kernel_files]
+    if j == 1:
+        results = [_compile_one(item) for item in work]
+    else:
+        with multiprocessing.Pool(processes=j) as pool:
+            results = pool.map(_compile_one, work)
+    ok  = [stem for stem, s, _ in results if s]
+    err = {stem: msg for stem, s, msg in results if not s}
+    return {"compiled": ok, "failed": err, "total": len(kernel_files)}
+
+
+def parse_dace_vec_reports(build_dir: "str | pathlib.Path") -> dict:
+    build_dir = pathlib.Path(build_dir)
+    reports: dict[str, str] = {}
+    for rpt in build_dir.rglob("vec_report.txt"):
+        reports[rpt.parent.name] = rpt.read_text()
+    return reports
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main_compile_dace(
+    default_root: str = "tsvc_2/tsvc_dace_microkernels",
+    default_build_dir: str = ".dace_build",
+    argv: "list | None" = None,
+) -> int:
+    ap = argparse.ArgumentParser(description="Compile (and optionally time) DaCe TSVC kernel files.")
+    ap.add_argument("root", metavar="SRC_ROOT")
+    ap.add_argument("-b", "--build-dir", default=default_build_dir, metavar="DIR")
+    ap.add_argument("--pattern", default="*.py", metavar="GLOB")
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--time", action="store_true")
+    ap.add_argument("--reps", type=int, default=30, metavar="N")
+    ap.add_argument("--len-1d", type=int, default=1024, metavar="N", dest="len_1d")
+    ap.add_argument("-j", type=int, default=multiprocessing.cpu_count(), metavar="N")
+    ap.add_argument(
+        "--debug-kernel", default=None, metavar="STEM",
+        help="Save child timing script for STEM to /tmp/dace_debug_<STEM>.py and exit (for crash diagnosis)."
+    )
+    ap.add_argument(
+        "--timing-out", default=None, metavar="FILE",
+        help="Write timing CSV to FILE (default: <build_dir>/dace.timing_report.csv)."
+    )
+    ap.add_argument(
+        "--vec-report", action="store_true",
+        help="Parse *.rpt vectorization-remark files from the build dir and print a summary."
+    )
+    ap.add_argument(
+        "--vec-report-out", default=None, metavar="FILE",
+        help="Write vec-report summary to FILE (default: <build_dir>/dace.vec_report.txt)."
+    )
     args = ap.parse_args(argv)
 
-    root     = pathlib.Path(args.root).resolve()
-    py_files = sorted(
-        f for f in root.rglob(args.pattern)
-        if f.name != "__init__.py" and not f.name.startswith("_")
-    )
-    print(f"Found {len(py_files)} DaCe kernel files under {root}")
+    src_root  = pathlib.Path(args.root).resolve()
+    build_dir = pathlib.Path(args.build_dir).resolve()
 
-    t0      = _time.perf_counter()
-    results = compile_dace_all(
-        root=args.root,
-        build_dir=args.build_dir,
-        force=args.force,
-        pattern=args.pattern,
-        jobs=args.jobs,
-        vec_report=args.vec_report,
-    )
-    dt = _time.perf_counter() - t0
+    if not src_root.is_dir():
+        raise SystemExit(f"ERROR: source root not found: {src_root}")
 
-    compiled = sum(1 for r in results if r["status"] == "compiled")
-    cached   = sum(1 for r in results if r["status"] == "cached")
-    skipped  = sum(1 for r in results if r["status"] == "skipped")
-    failed   = sum(1 for r in results if r["status"] == "failed")
-    for r in results:
-        if r["status"] == "failed":
-            print(f"  FAIL: {r['stem']}: {r['error']}")
-        elif r["status"] == "skipped":
-            print(f"  SKIP: {r['stem']}: {r['error']}")
-    if failed or skipped:
-        print(f"\n{compiled} compiled, {cached} cached, {skipped} skipped, {failed} failed")
+    all_py = sorted(src_root.glob("**/*.py"))
+    kernel_files = [
+        f for f in all_py
+        if fnmatch.fnmatch(f.name, args.pattern) and not f.name.startswith("_")
+    ]
+    print(f"Found {len(kernel_files)} DaCe kernel files under {src_root}")
 
-    # ── Vectorization report ──────────────────────────────────────────────────
-    if args.vec_report:
-        vec_results = parse_dace_vec_reports(args.build_dir)
-        vec_count   = sum(1 for v in vec_results.values() if v)
-        header      = f"DaCe vectorization report: {vec_count}/{len(vec_results)} kernels vectorized"
-        lines       = [header]
-        for name, vec in sorted(vec_results.items()):
-            lines.append(f"  {'VEC' if vec else '---'}  {name}")
+    t0 = _time.perf_counter()
+    work = [(f, build_dir, args.force) for f in kernel_files]
+    if args.j == 1:
+        results = [_compile_one(item) for item in work]
+    else:
+        with multiprocessing.Pool(processes=args.j) as pool:
+            results = pool.map(_compile_one, work)
 
-        report_text = "\n".join(lines) + "\n"
-        print(report_text, end="")
+    ok  = sum(1 for _, s, _ in results if s)
+    err = sum(1 for _, s, _ in results if not s)
+    for stem, success, msg in results:
+        if not success:
+            print(f"  [compile] FAIL {stem}: {msg}")
+    print(f"Compiled {ok}/{len(kernel_files)} kernels{f' ({err} failed)' if err else ''} in {_time.perf_counter()-t0:.1f}s")
 
-        out_path = pathlib.Path(args.vec_report_out) if args.vec_report_out \
-                    else pathlib.Path(args.build_dir) / "dace.vec_report.txt"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(report_text)
-        print(f"Saved vec report  -> {out_path}")
-
-    # ── Timing report ─────────────────────────────────────────────────────────
     if args.time:
-        timing_out = pathlib.Path(args.timing_out) if args.timing_out \
-                      else pathlib.Path(args.build_dir) / "dace.timing_report.csv"
-
-        print(f"Running DaCe timing phase ({args.reps} reps, len_1d={args.len_1d}) ...")
-        run_dace_timing_phase(
-            build_dir = pathlib.Path(args.build_dir).resolve(),
-            out_path  = timing_out,
-            pattern   = args.pattern,
-            reps      = args.reps,
-            len_1d    = args.len_1d,
+        timing_out = (
+            pathlib.Path(args.timing_out) if args.timing_out
+            else build_dir / "dace.timing_report.csv"
         )
+        print(f"Running DaCe timing phase ({args.reps} reps, len_1d={args.len_1d}) ...")
+        t1 = _time.perf_counter()
+        run_dace_timing_phase(
+            build_dir=build_dir,
+            out_path=timing_out,
+            pattern=args.pattern,
+            reps=args.reps,
+            len_1d=args.len_1d,
+            src_root=src_root,
+            debug_kernel=args.debug_kernel,
+        )
+        print(f"Done in {_time.perf_counter()-t1:.1f}s")
 
-    print(f"Done in {dt:.1f}s")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main_compile_dace())
