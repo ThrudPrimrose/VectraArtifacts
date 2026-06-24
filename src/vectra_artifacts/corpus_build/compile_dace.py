@@ -4,75 +4,192 @@
 from __future__ import annotations
 
 import argparse
-import ast
-import base64
-import ctypes
 import fnmatch
-import importlib.util
-import json
 import multiprocessing
+import os
 import pathlib
-import pickle
 import re
-import statistics
 import subprocess
 import sys
-import tempfile
 import time as _time
-import os
 from typing import Optional
 
 import numpy as np
 
-# ── ctypes pointer aliases ─────────────────────────────────────────────────────
-_dp   = ctypes.POINTER(ctypes.c_double)
-_fp   = ctypes.POINTER(ctypes.c_float)
-_ip   = ctypes.POINTER(ctypes.c_int)
-_i64p = ctypes.POINTER(ctypes.c_int64)
+# ── Vectorization remark patterns ──────────────────────────────────────────────
+_VEC_OPTIMIZED_RE = re.compile(
+    r"remark.*vectorized loop"
+    r"|note.*loop vectorized"
+    r"|optimized.*loop vectorized"
+    r"|note.*vectorized (?!0\b)\d+ loop"
+    r"|LOOP AUTO-VECTORIZED"
+    r"|loop vectorized"
+    r"|LOOP VECTORIZED",
+    re.IGNORECASE,
+)
+_VEC_MISSED_RE = re.compile(
+    r"(remark.*loop not vectorized"
+    r"|note.*not vectorized"
+    r"|missed.*loop"
+    r"|couldn.t vectorize"
+    r"|not vectorized"
+    r"|missed.*vectoriz)",
+    re.IGNORECASE,
+)
 
 
-# ── SIGNATURES loader ──────────────────────────────────────────────────────────
-def _load_signatures(root: pathlib.Path):
-    """Infer the correct bindings file from 'tsvc_2_5' or 'tsvc_2' in root."""
-    import importlib.util
+def _parse_vec_from_text(text: str) -> dict:
+    vec_lines    = [l.strip() for l in text.splitlines() if _VEC_OPTIMIZED_RE.search(l)]
+    missed_lines = [l.strip() for l in text.splitlines() if _VEC_MISSED_RE.search(l)]
+    return {
+        "vectorized":     len(vec_lines) > 0,
+        "vec_count":      len(vec_lines),
+        "missed_count":   len(missed_lines),
+        "sample_remarks": (vec_lines + missed_lines)[:5],
+    }
 
-    root_str = str(root)
 
-    # Check tsvc_2_5 first — it must come before tsvc_2 because tsvc_2_5
-    # also contains the substring "tsvc_2".
-    if "tsvc_2_5" in root_str:
-        bindings_rel = "tsvc_2_5/tsvc_2_5_bindings.py"
-    elif "tsvc_2" in root_str:
-        bindings_rel = "tsvc_2/tsvc_bindings.py"
-    else:
-        print(f"  [timing] ERROR: cannot infer TSVC version from root path: {root}",
-              flush=True)
+# ── Remark flags per compiler ──────────────────────────────────────────────────
+_REMARK_FLAGS_BY_COMPILER = {
+    "clang":   ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize"],
+    "clang++": ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize"],
+    "gcc":     ["-fopt-info-vec-optimized", "-fopt-info-vec-missed"],
+    "g++":     ["-fopt-info-vec-optimized", "-fopt-info-vec-missed"],
+    "icpx":    ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize"],
+}
+
+
+def _remark_flags_for(executable: str) -> list[str]:
+    base = pathlib.Path(executable).name.lower()
+    if "icpx" in base:
+        return _REMARK_FLAGS_BY_COMPILER["icpx"]
+    if "clang" in base:
+        return _REMARK_FLAGS_BY_COMPILER["clang"]
+    if "g++" in base or "gcc" in base:
+        return _REMARK_FLAGS_BY_COMPILER["g++"]
+    return []
+
+
+def _remark_flags_str_for(executable: str) -> str:
+    return " ".join(_remark_flags_for(executable))
+
+
+# ── .rpt file path for a kernel dir ───────────────────────────────────────────
+def _rpt_path(kdir: pathlib.Path) -> pathlib.Path:
+    return kdir / "vec_remarks.rpt"
+
+
+# ── Parse flags.make ──────────────────────────────────────────────────────────
+def _parse_flags_make(flags_make: pathlib.Path) -> tuple[str, list[str], list[str], list[str]]:
+    """Return (compiler_exe, cxx_flags, cxx_defines, cxx_includes).
+    Handles Apple Silicon's CXX_FLAGSarm64 key."""
+    compiler_exe = ""
+    cxx_flags: list[str] = []
+    cxx_defines: list[str] = []
+    cxx_includes: list[str] = []
+
+    text = flags_make.read_text(errors="ignore")
+
+    for line in text.splitlines():
+        m = re.match(r"#\s*compile\s+CXX\s+with\s+(\S+)", line)
+        if m:
+            compiler_exe = m.group(1)
+            break
+
+    for line in text.splitlines():
+        if "=" not in line or line.startswith("#"):
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip(); val = val.strip()
+        if re.match(r"CXX_FLAGS", key):
+            cxx_flags = val.split()
+        elif key == "CXX_DEFINES":
+            cxx_defines = val.split()
+        elif key == "CXX_INCLUDES":
+            cxx_includes = val.split()
+
+    return compiler_exe, cxx_flags, cxx_defines, cxx_includes
+
+
+# ── Re-run compiler to produce .rpt ───────────────────────────────────────────
+def _generate_rpt_for_kernel(
+    kdir: pathlib.Path,
+    extra_flags: "list[str] | None" = None,
+) -> "pathlib.Path | None":
+    rpt = _rpt_path(kdir)
+    build_root = kdir / "build"
+    if not build_root.is_dir():
         return None
 
-    # Anchor the bindings file relative to cwd (where the user runs the script from)
-    bindings_path = pathlib.Path.cwd() / bindings_rel
-
-    if not bindings_path.exists():
-        print(f"  [timing] ERROR: bindings file not found: {bindings_path}", flush=True)
+    src_cpp: Optional[pathlib.Path] = None
+    for c in sorted(build_root.rglob("src/cpu/*.cpp"), key=lambda p: len(p.parts), reverse=True):
+        src_cpp = c
+        break
+    if src_cpp is None:
+        for c in build_root.rglob("*.cpp"):
+            if "CMakeFiles" in str(c) or "/sample/" in str(c):
+                continue
+            src_cpp = c
+            break
+    if src_cpp is None:
         return None
 
-    spec = importlib.util.spec_from_file_location("_tsvc_bindings_tmp", bindings_path)
-    mod  = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
-    sigs = getattr(mod, "SIGNATURES", None)
+    flags_make: Optional[pathlib.Path] = None
+    candidates = [f for f in build_root.rglob("flags.make")
+                  if "dacestub" not in f.parts[-2]]
+    if candidates:
+        flags_make = max(candidates, key=lambda p: len(p.parts))
+    elif list(build_root.rglob("flags.make")):
+        flags_make = max(build_root.rglob("flags.make"), key=lambda p: len(p.parts))
 
-    if not sigs:
-        print(f"  [timing] ERROR: no SIGNATURES found in {bindings_path}", flush=True)
+    if flags_make is None:
         return None
 
-    print(f"  location of signature to load:  {bindings_path}", flush=True)
-    return sigs
+    compiler_exe, cxx_flags, cxx_defines, cxx_includes = _parse_flags_make(flags_make)
+    if not compiler_exe:
+        compiler_exe = os.environ.get("DACE_compiler_cpu_executable", "g++")
+
+    remark_flags = _remark_flags_for(compiler_exe)
+    if not remark_flags:
+        return None
+
+    cmd = (
+        [compiler_exe]
+        + cxx_defines
+        + cxx_includes
+        + cxx_flags
+        + (extra_flags or [])
+        + remark_flags
+        + ["-S", "-o", "/dev/null", str(src_cpp.resolve())]
+    )
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(flags_make.parent.parent.resolve()),
+        )
+        output = result.stderr + result.stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        output = ""
+
+    rpt.write_text(output)
+    return rpt
 
 
-# ── DaCe signature overrides removed ─────────────────────────────────────────
-# Signature matching is handled purely via the pool: every parameter name that
-# appears in SIGNATURES must have a corresponding entry in _make_array_pool().
-# To fix a SKIP, add the missing key to the pool — do not filter signatures.
+def _vec_info_from_rpt(kdir: pathlib.Path) -> dict:
+    """Read the .rpt file for kdir and return parsed vec_info dict."""
+    rpt = _rpt_path(kdir)
+    if rpt.exists():
+        return _parse_vec_from_text(rpt.read_text(errors="ignore"))
+    return _parse_vec_from_text("")
+
+
+# ── Extra flags from environment ───────────────────────────────────────────────
+def _extra_flags_from_env() -> list[str]:
+    return os.environ.get("CXXFLAGS", "").split()
 
 
 # ── Array pool ─────────────────────────────────────────────────────────────────
@@ -90,7 +207,7 @@ def _make_array_pool(len_1d: int, is_float: bool) -> dict:
     idx_arr = np.mod(np.arange(len_1d, dtype=np.int64) * 7 + 3, len_1d)
 
     return {
-        "a": arr_2d.ravel(), "b": arr_2d.ravel().copy(),
+        "a": arr_2d.ravel().copy(), "b": arr_2d.ravel().copy(),
         "c": rng.random(len_1d).astype(dtype),
         "d": rng.random(len_1d).astype(dtype),
         "e": rng.random(len_1d).astype(dtype),
@@ -103,8 +220,7 @@ def _make_array_pool(len_1d: int, is_float: bool) -> dict:
         "x": rng.random(len_1d).astype(dtype),
         "y": rng.random(len_1d).astype(dtype),
         "z": rng.random(len_1d).astype(dtype),
-        # tsvc_2 uses aa/bb/cc as 2D arrays: aa[len_2d][len_1d]
-        # Must be len_2d * len_1d elements to avoid out-of-bounds SIGSEGV
+        "d_": rng.random(len_1d).astype(dtype),
         "aa": rng.random(dim_2d * len_1d).astype(dtype),
         "bb": rng.random(dim_2d * len_1d).astype(dtype),
         "cc": rng.random(dim_2d * len_1d).astype(dtype),
@@ -118,8 +234,8 @@ def _make_array_pool(len_1d: int, is_float: bool) -> dict:
         "dst": rng.random(SSYM * len_1d).astype(dtype),
         "out": np.zeros(1, dtype=dtype),
         "threshold_data": rng.random(len_1d).astype(dtype),
-        "a_2d": arr_2d.ravel(), "b_2d": arr_2d.ravel().copy(),
-        "a_3d": arr_3d.ravel(), "b_3d": arr_3d.ravel().copy(),
+        "a_2d": arr_2d.ravel().copy(), "b_2d": arr_2d.ravel().copy(),
+        "a_3d": arr_3d.ravel().copy(), "b_3d": arr_3d.ravel().copy(),
         "ip": idx_arr.copy(), "idx": idx_arr.copy(),
         "index": idx_arr.copy(), "ind": idx_arr.copy(),
         "mask": rng.integers(0, 2, size=len_1d, dtype=np.int64),
@@ -136,128 +252,117 @@ def _make_array_pool(len_1d: int, is_float: bool) -> dict:
         "s_tile": S_TILE, "t_tile": T_TILE, "tile_size": T_TILE,
         "stride": 4, "offset": 1, "wrap_size": len_1d,
         "nx": dim_3d, "ny": dim_3d, "nz": dim_3d, "nt": 2,
-        # jacobi2d_double_tiled_sym_d: two symbolic tile sizes
-        "t1": 64,
-        "t2": 8,
-        # tsvc_2 missing scalars
-        "vlen": 8,
-        "n1": 1,
-        "n3": len_1d - 1,
-        "inc": 1,
-        "M": len_1d // 4,
-        "s1": 1.0,
-        "s2": 2.0,
-        "threshold": 0.5,
-        "j": 0,
-        # tsvc_2 reduction output scalars
+        "t1": 64, "t2": 8, "T1": 64, "T2": 8,
+        "vlen": 8, "n1": 1, "n3": len_1d - 1, "inc": 1,
+        "M": len_1d // 4, "s1": 1.0, "s2": 2.0, "threshold": 0.5, "j": 0,
         "sum_out": np.zeros(1, dtype=dtype),
         "result": np.zeros(1, dtype=dtype),
         "result_out": np.zeros(1, dtype=dtype),
         "dot": np.zeros(1, dtype=dtype),
         "dot_out": np.zeros(1, dtype=dtype),
-        # tsvc_2 flat 2D arrays — must be dim_2d * dim_2d (square) since
-        # kernels like s125 index up to LEN_2D*LEN_2D-1
         "flat": rng.random(dim_2d * dim_2d).astype(dtype),
         "flat_2d_array": rng.random(dim_2d * dim_2d).astype(dtype),
-        # tsvc_2 integer index array (int32)
-        "indx": np.mod(
-            np.arange(len_1d, dtype=np.int32) * 7 + 3, len_1d
-        ).astype(np.int32),
+        "indx": np.mod(np.arange(len_1d, dtype=np.int32) * 7 + 3, len_1d).astype(np.int32),
     }
 
 
-# ── ctypes helpers ─────────────────────────────────────────────────────────────
-def _is_pointer_ctype(ct) -> bool:
-    name = getattr(ct, "__name__", "") or ""
-    return name.startswith("LP_") or hasattr(ct, "contents") or ct in (_dp, _fp, _ip, _i64p)
-
-def _is_int64_ctype(ct) -> bool:
-    name = getattr(ct, "__name__", "") or ""
-    return name in ("LP_c_long", "LP_c_int64", "LP_c_longlong") or ct is _i64p
-
-def _array_to_ptr(arr: np.ndarray, ctype_d, is_float: bool):
-    ct_name = getattr(ctype_d, "__name__", "") or ""
-    if _is_int64_ctype(ctype_d):
-        return arr.astype(np.int64, copy=False).ctypes.data_as(ctypes.POINTER(ctypes.c_int64))
-    if ctype_d is _ip or ct_name in ("LP_c_int", "LP_c_int32"):
-        return arr.astype(np.int32, copy=False).ctypes.data_as(_ip)
-    if is_float:
-        a = arr.astype(np.float32) if arr.dtype != np.float32 else arr
-        return a.ctypes.data_as(_fp)
-    a = arr.astype(np.float64) if arr.dtype != np.float64 else arr
-    return a.ctypes.data_as(_dp)
-
-def _build_dace_ctypes_args(sig, pool: dict, is_float: bool):
-    call_args, keep_alive = [], []
-    for pname, ctype_d, ctype_f in sig:
-        val = pool.get(pname)
+# ── kwargs builder ─────────────────────────────────────────────────────────────
+def _build_dace_kwargs(sdfg, pool: dict) -> "tuple[Optional[dict], list[str]]":
+    kwargs: dict = {}
+    missing: list[str] = []
+    for name, arr_desc in sdfg.arrays.items():
+        if arr_desc.transient:
+            continue
+        val = pool.get(name)
         if val is None:
-            return None, None
-        if _is_pointer_ctype(ctype_d):
-            if not isinstance(val, np.ndarray):
-                if _is_int64_ctype(ctype_d):
-                    val = np.array([int(val)], dtype=np.int64)
-                elif (getattr(ctype_d, "__name__", "") or "").startswith("LP_c_int"):
-                    val = np.array([int(val)], dtype=np.int32)
-                elif is_float:
-                    val = np.array([float(val)], dtype=np.float32)
-                else:
-                    val = np.array([float(val)], dtype=np.float64)
-                keep_alive.append(val)
-            call_args.append(_array_to_ptr(val, ctype_d, is_float))
+            missing.append(name)
         else:
-            # Use the sig's declared ctype directly so 32-bit vs 64-bit scalars
-            # match the compiled ABI exactly (c_int vs c_int64 vs c_double etc.)
-            ct = ctype_f if is_float else ctype_d
-            try:
-                buf = ct(float(val) if 'double' in ct.__name__ or 'float' in ct.__name__ else int(val))
-            except Exception:
-                buf = ctypes.c_int64(int(val))  # safe fallback
-            keep_alive.append(buf)
-            call_args.append(buf)
-    return call_args, keep_alive
+            kwargs[name] = val
+    for sym_name in sdfg.free_symbols:
+        sym_str = str(sym_name)
+        if sym_str not in kwargs and sym_str in pool:
+            kwargs[sym_str] = pool[sym_str]
+    if missing:
+        return None, missing
+    return kwargs, []
 
 
-# ── Source-order helper ────────────────────────────────────────────────────────
-def _sig_order_from_source(py_path: pathlib.Path, base: str) -> "list[str] | None":
+# ── Per-kernel timing worker ───────────────────────────────────────────────────
+def _time_one_kernel(args_tuple):
+    """
+    Compile (if needed) and time a single DaCe kernel.
+
+    Returns (stem, base, (median_us, min_us, stdev_us, vec_info, raw_timings_us))
+    on success, or (stem, None, error_message) on failure.
+    """
+    kdir, reps, is_float, len_1d = args_tuple
+    import re as _re, pathlib, time as _t, statistics as _stats
+    import numpy as np
+
+    stem = kdir.name
+    base = _re.sub(r"_(d|f)(_single)?$", "", stem)
+
     try:
-        tree = ast.parse(py_path.read_text())
-    except (SyntaxError, OSError):
-        return None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in (
-            base, f"{base}_d", f"{base}_f", f"{base}_d_single", f"{base}_f_single"
-        ):
-            return [a.arg for a in node.args.args]
-    return None
+        import dace, dace.dtypes, dace.config
+    except ImportError:
+        return stem, None, "dace not importable"
 
-def _find_dylib(kdir: pathlib.Path, stem: str) -> Optional[pathlib.Path]:
-    """
-    Find the pre-built dacestub shared library for a DaCe kernel.
+    dace.config.Config.set("compiler", "allow_view_arguments", value=True)
+    homebrew_omp = pathlib.Path("/opt/homebrew/opt/libomp")
+    if homebrew_omp.exists():
+        inc = str(homebrew_omp / "include")
+        lib = str(homebrew_omp / "lib")
+        existing = dace.config.Config.get("compiler", "cpu", "args") or ""
+        if inc not in existing:
+            dace.config.Config.set(
+                "compiler", "cpu", "args",
+                value=f"{existing} -I{inc} -L{lib} -lomp",
+            )
 
-    Both tsvc_2 and tsvc_2_5 use the same modular layout:
-        <kdir>/build/<stem>_<stem>_<hash>/build/libdacestub_<stem>_<stem>.dylib
-    """
-    build = kdir / "build"
-    if not build.is_dir():
-        return None
+    pool = _make_array_pool(len_1d, is_float)
 
-    candidates: list[pathlib.Path] = []
-    for sub in build.iterdir():
-        if not sub.is_dir() or not sub.name.startswith(f"{stem}_"):
-            continue
-        sub_build = sub / "build"
-        if not sub_build.is_dir():
-            continue
-        for ext in (".dylib", ".so"):
-            stub = sub_build / f"libdacestub_{stem}_{stem}{ext}"
-            if stub.exists():
-                candidates.append(stub)
+    sdfg_path = kdir / "program.sdfgz"
+    try:
+        sdfg = dace.SDFG.from_file(str(sdfg_path))
+    except Exception as exc:
+        return stem, None, f"load SDFG failed: {exc}"
 
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    kwargs, missing = _build_dace_kwargs(sdfg, pool)
+    if kwargs is None:
+        return stem, None, f"unresolved args: {missing}"
+
+    sdfg.build_folder = str(kdir / "build")
+    sdfg.instrument = dace.dtypes.InstrumentationType.No_Instrumentation
+
+    try:
+        csdfg = sdfg.compile()
+    except Exception as exc:
+        return stem, None, f"compile failed: {exc}"
+
+    _generate_rpt_for_kernel(kdir, extra_flags=_extra_flags_from_env())
+    vec_info = _vec_info_from_rpt(kdir)
+
+    try:
+        csdfg(**kwargs)  # warm-up (not timed)
+        timings_us = []
+        for _ in range(reps):
+            t0 = _t.perf_counter_ns()
+            csdfg(**kwargs)
+            timings_us.append((_t.perf_counter_ns() - t0) / 1e3)  # ns → µs
+
+        median_us = _stats.median(timings_us)
+        min_us    = min(timings_us)
+        stdev_us  = _stats.stdev(timings_us) if reps > 1 else 0.0
+        # ---- include raw per-rep timings in the return payload ----
+        return stem, base, (median_us, min_us, stdev_us, vec_info, timings_us)
+    except Exception as exc:
+        return stem, None, f"run failed: {exc}"
 
 
 # ── Timing phase ───────────────────────────────────────────────────────────────
+_DEFAULT_KERNEL_TIMEOUT = 180
+
+
 def run_dace_timing_phase(
     build_dir: pathlib.Path,
     out_path: pathlib.Path,
@@ -265,270 +370,106 @@ def run_dace_timing_phase(
     reps: int,
     len_1d: int,
     src_root: "pathlib.Path | None" = None,
-    debug_kernel: "str | None" = None,
+    kernel_timeout: int = _DEFAULT_KERNEL_TIMEOUT,
+    raw_path: "pathlib.Path | None" = None,  # NEW: path for raw timings CSV
 ) -> None:
-    SIGNATURES = _load_signatures(src_root)
-    if SIGNATURES is None:
-        return
-
     is_float = bool(re.search(r"_f(_single)?\.py$", pattern))
-    pool     = _make_array_pool(len_1d, is_float)
-    rows: list[tuple] = []
-    skipped = 0
-
-    kernel_src_files: list[pathlib.Path] = []
-    if src_root is not None and src_root.is_dir():
-        kernel_src_files = list(src_root.glob("**/*.py"))
 
     kernel_dirs = sorted(
         d for d in build_dir.iterdir()
         if d.is_dir() and (d / "program.sdfgz").exists()
     )
-    print(f"  [timing] Found {len(kernel_dirs)} compiled DaCe kernel folders")
+    print(f"  [timing] Found {len(kernel_dirs)} compiled DaCe kernel folders", flush=True)
 
-    for kdir in kernel_dirs:
-        stem = kdir.name
-        base = re.sub(r"_(d|f)(_single)?$", "", stem)
+    rows: list[tuple] = []
+    raw_rows: list[tuple] = []  # NEW: (kernel, rep_idx, timing_us)
+    skipped = 0
+    work = [(kdir, reps, is_float, len_1d) for kdir in kernel_dirs]
 
-        sig = None
-        for candidate in [
-            stem,
-            re.sub(r"_(d|f)(_single)?$", "", stem),
-            re.sub(r"_d_single$", "_single", stem),
-            re.sub(r"_f_single$", "_single", stem),
-            re.sub(r"_(double|float|single)$", "", stem),
-        ]:
-            sig = SIGNATURES.get(candidate)
-            if sig is not None:
-                base = candidate
-                break
+    pool = multiprocessing.Pool(processes=1)
+    try:
+        for item in work:
+            kdir = item[0]
+            stem = kdir.name
+            print(f"  [timing] submitting {stem} ...", flush=True)
 
-        if sig is None:
-            available = sorted(SIGNATURES.keys())[:10]
-            print(f"  [timing] SKIP {stem} — not in SIGNATURES. Sample keys: {available}")
-            skipped += 1
-            continue
-
-        src_py = next(
-            (p for p in kernel_src_files if p.stem == stem or p.stem == base), None
-        )
-        if src_py is not None:
-            src_order = _sig_order_from_source(src_py, base)
-            if src_order is not None:
-                sig_by_name = {pname: (pname, ct_d, ct_f) for pname, ct_d, ct_f in sig}
-                reordered  = [sig_by_name[p] for p in src_order if p in sig_by_name]
-                reordered += [e for e in sig if e[0] not in {p for p in src_order}]
-                sig = reordered
-
-        dylib = _find_dylib(kdir, stem)
-        if dylib is None:
-            print(f"  [timing] SKIP {stem} — no .dylib/.so in {kdir / 'build'}")
-            skipped += 1
-            continue
-
-        try:
-            lib = ctypes.CDLL(str(dylib))
-        except OSError as exc:
-            print(f"  [timing] SKIP {stem} — cannot load {dylib.name}: {exc}")
-            skipped += 1
-            continue
-
-        init_sym     = f"__dace_init_{stem}"
-        exit_sym     = f"__dace_exit_{stem}"
-        run_sym_name = f"__program_{stem}"
-        if run_sym_name is None:
-            print(f"  [timing] SKIP {stem} — run symbol not found")
-            skipped += 1
-            continue
-
-        call_args, _keep = _build_dace_ctypes_args(sig, pool, is_float)
-        if call_args is None:
-            missing = [p for p, _, _ in sig if pool.get(p) is None]
-            print(f"  [timing] SKIP {stem} — unresolved arg(s): {missing}")
-            skipped += 1
-            continue
-
-        print(f"  [timing] running {stem} ...", end=" ", flush=True)
-
-        # Resolve libomp path early so child_lines can reference it
-        _conda_prefix = pathlib.Path(sys.executable).parent.parent
-        _libomp = next((
-            str(p) for p in [
-                _conda_prefix / "lib" / "libomp.dylib",
-                _conda_prefix / "lib" / "libiomp5.dylib",
-                pathlib.Path("/opt/homebrew/opt/libomp/lib/libomp.dylib"),
-                pathlib.Path("/opt/homebrew/lib/libomp.dylib"),
-                pathlib.Path("/usr/local/lib/libomp.dylib"),
-                _conda_prefix / "lib" / "libiomp5.so",
-                _conda_prefix / "lib" / "libomp.so",
-                pathlib.Path("/usr/lib/x86_64-linux-gnu/libomp.so.5"),
-                pathlib.Path("/usr/lib/aarch64-linux-gnu/libomp.so.5"),
-            ] if p.exists()
-        ), None)
-
-        # Serialise the *raw* numpy/scalar pool values (not ctypes objects).
-        # The child process rebuilds ctypes args from scratch using the same helpers.
-        dylib_str    = str(dylib)
-        init_sym     = f"__dace_init_{stem}"
-        exit_sym     = f"__dace_exit_{stem}"
-        module_path  = str(pathlib.Path(__file__).resolve())
-
-        # Extract only the pool keys this kernel needs, as plain numpy/scalars
-        raw_pool = {}
-        for pname, _, _ in sig:
-            v = pool.get(pname)
-            if v is not None:
-                raw_pool[pname] = v
-
-        # Serialise sig as (pname, dtype_name_d, dtype_name_f) so ctypes aren't pickled
-        def _ctype_name(ct):
-            return getattr(ct, "__name__", None) or repr(ct)
-        sig_serial = [(pname, _ctype_name(ct_d), _ctype_name(ct_f)) for pname, ct_d, ct_f in sig]
-
-        pool_b64   = base64.b64encode(pickle.dumps(raw_pool)).decode()
-        sig_b64    = base64.b64encode(pickle.dumps(sig_serial)).decode()
-
-        tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        tmp.close()
-        tmp_path = tmp.name
-
-        child_lines = [
-            # Preload libomp with RTLD_GLOBAL FIRST, before any other imports,
-            # so OMP symbols are globally visible when the kernel .dylib loads.
-            "import ctypes as _ctypes_early",
-            "for _omp_path in [" + repr(str(_libomp)) + "]:",
-            "    if _omp_path and _omp_path != 'None':",
-            "        try: _ctypes_early.CDLL(_omp_path, mode=_ctypes_early.RTLD_GLOBAL)",
-            "        except OSError: pass",
-            "import ctypes, statistics, time as _t, json, pathlib, pickle, base64, sys, importlib.util",
-            # Load the parent module so we can reuse _is_pointer_ctype, _array_to_ptr etc.
-            "spec = importlib.util.spec_from_file_location('_cdace', " + repr(module_path) + ")",
-            "mod  = importlib.util.module_from_spec(spec)",
-            "spec.loader.exec_module(mod)",
-            "import numpy as np",
-            "raw_pool   = pickle.loads(base64.b64decode(" + repr(pool_b64) + "))",
-            "sig_serial = pickle.loads(base64.b64decode(" + repr(sig_b64) + "))",
-            "is_float   = " + repr(is_float),
-            # Reconstruct sig with real ctypes
-            "_CMAP = {",
-            "    'LP_c_double': ctypes.POINTER(ctypes.c_double),",
-            "    'LP_c_float':  ctypes.POINTER(ctypes.c_float),",
-            "    'LP_c_int':    ctypes.POINTER(ctypes.c_int),",
-            "    'LP_c_long':   ctypes.POINTER(ctypes.c_int64),",
-            "    'LP_c_int64':  ctypes.POINTER(ctypes.c_int64),",
-            "    'LP_c_longlong': ctypes.POINTER(ctypes.c_int64),",
-            "    'c_double': ctypes.c_double,",
-            "    'c_float':  ctypes.c_float,",
-            "    'c_int':    ctypes.c_int,",
-            "    'c_int64':  ctypes.c_int64,",
-            "    'c_long':   ctypes.c_int64,",
-            "    'c_int32':  ctypes.c_int32,",
-            "}",
-            "sig = [(pn, _CMAP.get(cdn, ctypes.c_int64), _CMAP.get(cfn, ctypes.c_int64))",
-            "       for pn, cdn, cfn in sig_serial]",
-            "call_args, keep = mod._build_dace_ctypes_args(sig, raw_pool, is_float)",
-            "if call_args is None:",
-            "    raise RuntimeError('missing pool args in child')",
-            # Load library and run
-            "lib = ctypes.CDLL(" + repr(dylib_str) + ")",
-            "fn_init = getattr(lib, " + repr(init_sym) + ")",
-            "fn_run  = getattr(lib, " + repr(run_sym_name) + ")",
-            "fn_exit = getattr(lib, " + repr(exit_sym) + ")",
-            "fn_init.restype = ctypes.c_void_p",
-            "fn_run.restype  = None",
-            "fn_exit.restype = None",
-            "print('[child] sig:', [(p, cd, cf) for p,cd,cf in sig_serial])",
-            "print('[child] pool keys:', list(raw_pool.keys()))",
-            "print('[child] call_args types:', [type(a).__name__ for a in call_args])",
-            "import sys as _sys; _sys.stdout.flush()",
-            "handle = fn_init()",
-            "h = ctypes.c_void_p(handle)",
-            "timings = []",
-            "for _ in range(" + str(reps) + "):",
-            "    t0 = _t.perf_counter_ns()",
-            "    fn_run(h, *call_args)",
-            "    timings.append(_t.perf_counter_ns() - t0)",
-            "fn_exit(h)",
-            "result = dict(median=statistics.median(timings), min=min(timings),",
-            "              stdev=statistics.stdev(timings) if " + str(reps) + ">1 else 0.0)",
-            "pathlib.Path(" + repr(tmp_path) + ").write_text(json.dumps(result))",
-        ]
-        child_script = "\n".join(child_lines)
-
-        # Write child script to a temp file — avoids OSError "Argument list too long"
-        # when base64-encoded pool data makes the -c string exceed OS limits.
-        tmp_script = tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False)
-        tmp_script.write(child_script)
-        tmp_script.close()
-
-        child_env = {**os.environ, "OMP_NUM_THREADS": "1", "KMP_DUPLICATE_LIB_OK": "TRUE"}
-        # DYLD_INSERT_LIBRARIES (macOS) / LD_PRELOAD (Linux) — best effort only
-        if _libomp:
-            if sys.platform == "darwin":
-                child_env.setdefault("DYLD_INSERT_LIBRARIES", _libomp)
-            else:
-                child_env.setdefault("LD_PRELOAD", _libomp)
-
-        # --debug-kernel: save script to /tmp for manual inspection and skip running
-        if debug_kernel and (stem == debug_kernel or base == debug_kernel):
-            debug_path = f"/tmp/dace_debug_{stem}.py"
-            pathlib.Path(debug_path).write_text(child_script)
-            print(f"\n  [debug] Child script saved to: {debug_path}")
-            print(f"  [debug] Run manually with:")
-            print(f"  [debug]   python3 {debug_path}")
-            print(f"  [debug] Or for crash details:")
-            print(f"  [debug]   OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE python3 {debug_path}")
-            skipped += 1
-            continue
-
-        proc = subprocess.run(
-            [sys.executable, tmp_script.name],
-            timeout=60,
-            capture_output=True,
-            text=True,
-            env=child_env,
-        )
-        try:
-            pathlib.Path(tmp_script.name).unlink(missing_ok=True)
-        except Exception:
-            pass
-
-        if proc.returncode != 0:
-            err_lines = (proc.stderr or proc.stdout or "").strip().splitlines()
-            err_tail  = " | ".join(err_lines[-3:]) if err_lines else ""
-            print(f"CRASH (exit {proc.returncode}){(': ' + err_tail) if err_tail else ''}", flush=True)
-            skipped += 1
-        else:
+            async_result = pool.apply_async(_time_one_kernel, (item,))
             try:
-                result = json.loads(pathlib.Path(tmp_path).read_text())
-                print("ok", flush=True)
-                rows.append((base, result["median"], result["min"], result["stdev"]))
-            except Exception as exc:
-                print(f"failed reading result: {exc}", flush=True)
+                result = async_result.get(timeout=kernel_timeout)
+                stem_r, base, payload = result
+                if base is None:
+                    print(f"  [timing] SKIP {stem_r} — {payload}", flush=True)
+                    skipped += 1
+                else:
+                    median_us, min_us, stdev_us, vec_info, timings_us = payload  # unpack raw
+                    vec_tag = "VEC" if vec_info["vectorized"] else "---"
+                    print(
+                        f"  [timing] ok   {stem_r}  "
+                        f"median={median_us:.1f}µs  min={min_us:.1f}µs  [{vec_tag}]",
+                        flush=True,
+                    )
+                    rows.append((base, median_us, min_us, stdev_us, vec_info))
+                    # Accumulate raw timings
+                    for rep_idx, t_us in enumerate(timings_us):
+                        raw_rows.append((base, rep_idx, t_us))
+
+            except multiprocessing.TimeoutError:
+                print(f"  [timing] SKIP {stem} — timed out after {kernel_timeout}s", flush=True)
                 skipped += 1
+                pool.terminate(); pool.join()
+                pool = multiprocessing.Pool(processes=1)
 
-        try:
-            pathlib.Path(tmp_path).unlink(missing_ok=True)
-        except Exception:
-            pass
-        del _keep
+            except Exception as exc:
+                print(f"  [timing] SKIP {stem} — worker error: {exc}", flush=True)
+                skipped += 1
+                pool.terminate(); pool.join()
+                pool = multiprocessing.Pool(processes=1)
 
+    finally:
+        pool.terminate()
+        pool.join()
+
+    # Write aggregated summary CSV (unchanged format)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["kernel,median_ns,min_ns,stdev_ns"]
-    for kernel, med, mn, std in sorted(rows):
-        lines.append(f"{kernel},{med:.0f},{mn:.0f},{std:.0f}")
+    lines = ["kernel,median_us,min_us,stdev_us,vectorized,vec_count,missed_count"]
+    for kernel, med, mn, std, vec_info in sorted(rows, key=lambda r: r[0]):
+        lines.append(
+            f"{kernel},{med:.1f},{mn:.1f},{std:.1f},"
+            f"{'1' if vec_info['vectorized'] else '0'},"
+            f"{vec_info['vec_count']},"
+            f"{vec_info['missed_count']}"
+        )
     out_path.write_text("\n".join(lines) + "\n")
+
+    # Write raw timings CSV
+    if raw_path is None:
+        raw_path = out_path.with_name(out_path.stem + "_raw_timings.csv")
+    raw_path = pathlib.Path(raw_path)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_lines = ["kernel,rep,timing_us"]
+    for kernel, rep_idx, t_us in raw_rows:
+        raw_lines.append(f"{kernel},{rep_idx},{t_us:.3f}")
+    raw_path.write_text("\n".join(raw_lines) + "\n")
+
     print(f"  [timing] {len(rows)} kernels timed, {skipped} skipped -> {out_path}")
+    print(f"  [timing] raw timings ({len(raw_rows)} rows) -> {raw_path}", flush=True)
 
 
 # ── Compilation helpers ────────────────────────────────────────────────────────
 def _compile_one(args_tuple):
+    """
+    Compile one DaCe kernel to SDFGZ + shared library via an isolated subprocess.
+    Returns: (stem, success, message)
+    """
     py_file, build_dir, force = args_tuple
     stem      = py_file.stem
     kdir      = build_dir / stem
     sdfg_path = kdir / "program.sdfgz"
 
+    extra = _extra_flags_from_env()
+
     if sdfg_path.exists() and not force:
+        _generate_rpt_for_kernel(kdir, extra_flags=extra)
         return stem, True, "cached"
 
     kdir.mkdir(parents=True, exist_ok=True)
@@ -557,9 +498,12 @@ def _compile_one(args_tuple):
             capture_output=True, text=True, timeout=300,
         )
         if result.returncode != 0:
-            err = (result.stderr or result.stdout).strip().splitlines()
+            err = result.stderr.strip().splitlines()
             return stem, False, err[-1] if err else "unknown error"
+
+        _generate_rpt_for_kernel(kdir, extra_flags=extra)
         return stem, True, "compiled"
+
     except subprocess.TimeoutExpired:
         return stem, False, "timeout"
     except Exception as exc:
@@ -586,8 +530,8 @@ def compile_dace_all(
     if j == 1:
         results = [_compile_one(item) for item in work]
     else:
-        with multiprocessing.Pool(processes=j) as pool:
-            results = pool.map(_compile_one, work)
+        with multiprocessing.Pool(processes=j) as p:
+            results = p.map(_compile_one, work)
     ok  = [stem for stem, s, _ in results if s]
     err = {stem: msg for stem, s, msg in results if not s}
     return {"compiled": ok, "failed": err, "total": len(kernel_files)}
@@ -595,9 +539,13 @@ def compile_dace_all(
 
 def parse_dace_vec_reports(build_dir: "str | pathlib.Path") -> dict:
     build_dir = pathlib.Path(build_dir)
-    reports: dict[str, str] = {}
-    for rpt in build_dir.rglob("vec_report.txt"):
-        reports[rpt.parent.name] = rpt.read_text()
+    reports: dict[str, dict] = {}
+    for kdir in build_dir.iterdir():
+        if not kdir.is_dir():
+            continue
+        if not (kdir / "program.sdfgz").exists():
+            continue
+        reports[kdir.name] = _vec_info_from_rpt(kdir)
     return reports
 
 
@@ -616,22 +564,15 @@ def main_compile_dace(
     ap.add_argument("--reps", type=int, default=30, metavar="N")
     ap.add_argument("--len-1d", type=int, default=1024, metavar="N", dest="len_1d")
     ap.add_argument("-j", type=int, default=multiprocessing.cpu_count(), metavar="N")
-    ap.add_argument(
-        "--debug-kernel", default=None, metavar="STEM",
-        help="Save child timing script for STEM to /tmp/dace_debug_<STEM>.py and exit (for crash diagnosis)."
-    )
-    ap.add_argument(
-        "--timing-out", default=None, metavar="FILE",
-        help="Write timing CSV to FILE (default: <build_dir>/dace.timing_report.csv)."
-    )
-    ap.add_argument(
-        "--vec-report", action="store_true",
-        help="Parse *.rpt vectorization-remark files from the build dir and print a summary."
-    )
-    ap.add_argument(
-        "--vec-report-out", default=None, metavar="FILE",
-        help="Write vec-report summary to FILE (default: <build_dir>/dace.vec_report.txt)."
-    )
+    ap.add_argument("--timing-out", default=None, metavar="FILE")
+    ap.add_argument("--raw-timing-out", default=None, metavar="FILE",   # NEW
+                    help="Write raw per-repetition timing CSV to FILE. "
+                         "Defaults to <timing-out stem>_raw_timings.csv.")
+    ap.add_argument("--kernel-timeout", type=int, default=_DEFAULT_KERNEL_TIMEOUT,
+                    metavar="SEC", dest="kernel_timeout")
+    ap.add_argument("--vec-report", action="store_true",
+                    help="Read per-kernel .rpt files and print vectorization summary.")
+    ap.add_argument("--vec-report-out", default=None, metavar="FILE")
     args = ap.parse_args(argv)
 
     src_root  = pathlib.Path(args.root).resolve()
@@ -660,14 +601,26 @@ def main_compile_dace(
     for stem, success, msg in results:
         if not success:
             print(f"  [compile] FAIL {stem}: {msg}")
-    print(f"Compiled {ok}/{len(kernel_files)} kernels{f' ({err} failed)' if err else ''} in {_time.perf_counter()-t0:.1f}s")
+    print(
+        f"Compiled {ok}/{len(kernel_files)} kernels"
+        + (f" ({err} failed)" if err else "")
+        + f" in {_time.perf_counter() - t0:.1f}s"
+    )
 
     if args.time:
         timing_out = (
             pathlib.Path(args.timing_out) if args.timing_out
             else build_dir / "dace.timing_report.csv"
         )
-        print(f"Running DaCe timing phase ({args.reps} reps, len_1d={args.len_1d}) ...")
+        raw_timing_out = (
+            pathlib.Path(args.raw_timing_out) if args.raw_timing_out
+            else None  # run_dace_timing_phase will auto-derive from timing_out
+        )
+        print(
+            f"Running DaCe timing phase "
+            f"({args.reps} reps, len_1d={args.len_1d}, "
+            f"timeout={args.kernel_timeout}s/kernel) ..."
+        )
         t1 = _time.perf_counter()
         run_dace_timing_phase(
             build_dir=build_dir,
@@ -676,9 +629,33 @@ def main_compile_dace(
             reps=args.reps,
             len_1d=args.len_1d,
             src_root=src_root,
-            debug_kernel=args.debug_kernel,
+            kernel_timeout=args.kernel_timeout,
+            raw_path=raw_timing_out,  # NEW
         )
-        print(f"Done in {_time.perf_counter()-t1:.1f}s")
+        print(f"Done in {_time.perf_counter() - t1:.1f}s")
+
+    if args.vec_report:
+        vec_results = parse_dace_vec_reports(build_dir)
+        vec_count   = sum(1 for v in vec_results.values() if v.get("vectorized"))
+        header      = f"DaCe vectorization report: {vec_count}/{len(vec_results)} kernels with vectorized loops"
+        report_lines = [header]
+        for name, info in sorted(vec_results.items()):
+            tag = "[VEC]" if info.get("vectorized") else "[---]"
+            report_lines.append(
+                f"  {tag} {name}  "
+                f"(vec={info['vec_count']}, missed={info['missed_count']})"
+            )
+            for remark in info.get("sample_remarks", [])[:3]:
+                report_lines.append(f"        {remark}")
+        report_text = "\n".join(report_lines)
+        print(report_text)
+        out_path = (
+            pathlib.Path(args.vec_report_out) if args.vec_report_out
+            else build_dir / "dace.vec_report.txt"
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(report_text)
+        print(f"Saved vec report -> {out_path}")
 
     return 0
 

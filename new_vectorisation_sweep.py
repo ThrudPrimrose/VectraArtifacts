@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+"""run_sweep.py — CPP + DaCe vectorization sweep across compiler/cost-model/CPU."""
+
 import subprocess
 import pathlib
 import os
@@ -37,6 +40,92 @@ _PRECISION_PATTERNS: dict = {
     ("double", "tsvc_2_5"): ("*_d.cpp",        "*_d.py"),
     ("float",  "tsvc_2_5"): ("*_f.cpp",        "*_f.py"),
 }
+
+
+# ── Vectorization remark flags per compiler ────────────────────────────────────
+_VEC_REMARK_COMPILE_FLAGS = {
+    "clang": "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize",
+    "gcc":   "-fopt-info-vec-optimized -fopt-info-vec-missed",
+    "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
+}
+
+# ── Cost-model optimisation flags ─────────────────────────────────────────────
+# These are injected into CXXFLAGS so that compile_dace.py's
+# _extra_flags_from_env() can forward them when regenerating .rpt files.
+# This ensures the vec report reflects the actual cost-model configuration,
+# not just whatever flags DaCe baked into flags.make.
+#
+# The sourced shell script already sets the compiler driver / linker correctly;
+# these flags are the optimisation-level additions that differ per cost-model.
+_COST_MODEL_CXXFLAGS = {
+    "default":  "-O2",
+    "cheap":    "-O1",
+    "unlimited": "-O3 -ffast-math -march=native",
+    "disabled": "-O0 -fno-vectorize",
+}
+
+# GCC equivalents (fno-vectorize is -fno-tree-vectorize for GCC)
+_COST_MODEL_CXXFLAGS_GCC = {
+    "default":  "-O2",
+    "cheap":    "-O1",
+    "unlimited": "-O3 -ffast-math -march=native",
+    "disabled": "-O0 -fno-tree-vectorize",
+}
+
+
+def _cost_model_flags(compiler: str, cost_model: str) -> str:
+    """Return the optimisation flags for a given compiler/cost-model pair."""
+    if compiler == "gcc":
+        return _COST_MODEL_CXXFLAGS_GCC.get(cost_model, "")
+    return _COST_MODEL_CXXFLAGS.get(cost_model, "")
+
+
+def _inject_vec_remark_flags(env: dict, compiler: str) -> dict:
+    """
+    Append vectorization remark flags to CXXFLAGS / DACE_compiler_cpu_args
+    in *env* so both the CPP build system and DaCe's CMake invocation pass
+    them through to the compiler.
+
+    Returns the modified env dict (a copy is made — the original is unchanged).
+    """
+    env = dict(env)
+    remark_flags = _VEC_REMARK_COMPILE_FLAGS.get(compiler, "")
+    if not remark_flags:
+        return env
+
+    existing_cxx = env.get("CXXFLAGS", "")
+    env["CXXFLAGS"] = f"{existing_cxx} {remark_flags}".strip()
+
+    existing_dace = env.get("DACE_compiler_cpu_args", "")
+    env["DACE_compiler_cpu_args"] = f"{existing_dace} {remark_flags}".strip()
+
+    return env
+
+
+def _inject_cost_model_flags(env: dict, compiler: str, cost_model: str) -> dict:
+    """
+    Inject cost-model optimisation flags into CXXFLAGS so that
+    compile_dace.py's _extra_flags_from_env() forwards them when regenerating
+    per-kernel .rpt files.  Without this, DaCe vec reports always reflect the
+    same baseline regardless of cost-model, because flags.make only records
+    what DaCe itself decided — not env-injected optimisation flags.
+
+    These flags are placed at the START of CXXFLAGS so that any later
+    cost-model-specific overrides from the sourced shell script take precedence.
+
+    Returns a modified copy of env.
+    """
+    env = dict(env)
+    flags = _cost_model_flags(compiler, cost_model)
+    if not flags:
+        return env
+
+    existing = env.get("CXXFLAGS", "")
+    # Cost-model flags lead; existing (sourced) flags trail so compiler-driver
+    # settings from vectra-source-sh are not overridden.
+    env["CXXFLAGS"] = f"{flags} {existing}".strip()
+
+    return env
 
 
 # ── CLI arguments ──────────────────────────────────────────────────────────────
@@ -95,7 +184,7 @@ valid precisions  : {", ".join(ALL_PRECISIONS)}
     ap.add_argument("--time", action="store_true",
                     help="Enable runtime timing after each compile step.")
     ap.add_argument("--reps", type=int, default=100, metavar="N",
-                    help="Timing repetitions per kernel when --time is set (default: 30).")
+                    help="Timing repetitions per kernel when --time is set (default: 100).")
     ap.add_argument("--len-1d", type=int, default=1024, metavar="N", dest="len_1d",
                     help="Array length used during timing (default: 1024).")
     return ap.parse_args()
@@ -119,12 +208,8 @@ def run_precision_sweep(
         )
     pattern_cpp, pattern_dace = _PRECISION_PATTERNS[key]
 
-    if args.precision == "both":
-        output_cpp  = base_cpp  / precision
-        output_dace = base_dace / precision
-    else:
-        output_cpp  = base_cpp
-        output_dace = base_dace
+    output_cpp  = base_cpp  / precision
+    output_dace = base_dace / precision
 
     output_cpp.mkdir(parents=True, exist_ok=True)
     output_dace.mkdir(parents=True, exist_ok=True)
@@ -171,6 +256,18 @@ def run_precision_sweep(
                 env["CXX"] = "/opt/homebrew/bin/g++-15"
                 env["CXX_COMPILER"] = "gcc"
                 env["DACE_compiler_cpu_executable"] = "/opt/homebrew/bin/g++-15"
+
+        # ── Step 1: inject cost-model optimisation flags into CXXFLAGS ────────
+        # compile_dace.py reads CXXFLAGS via _extra_flags_from_env() and
+        # forwards them when regenerating per-kernel .rpt files, so the vec
+        # report reflects the actual cost-model configuration.
+        env = _inject_cost_model_flags(env, compiler, cost_model)
+
+        # ── Step 2: append vectorization remark flags ──────────────────────────
+        # Purely diagnostic — never changes vectorization decisions.
+        # Placed AFTER cost-model flags so they trail in CXXFLAGS and are not
+        # accidentally overridden.
+        env = _inject_vec_remark_flags(env, compiler)
 
         # ── CPP ───────────────────────────────────────────────────────────────
         cpp_out_dir   = output_cpp / name
@@ -221,6 +318,7 @@ def run_precision_sweep(
                 "--reps", str(args.reps),
                 "--len-1d", str(args.len_1d),
                 "--timing-out", str(dace_out_dir / "timing_report.csv"),
+                "--kernel-timeout", "120",
             ]
 
         result_dace = subprocess.run(dace_cmd, capture_output=True, text=True, env=env)

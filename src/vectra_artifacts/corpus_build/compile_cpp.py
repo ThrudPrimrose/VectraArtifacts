@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 compile_cpp.py  —  src/vectra_artifacts/corpus_build/compile_cpp.py
 
@@ -9,6 +10,7 @@ Shared by tsvc_2 and tsvc_2_5.
 
 import argparse
 import ctypes
+import multiprocessing
 import os
 import pathlib
 import re
@@ -17,6 +19,7 @@ import subprocess
 import sys
 import time as _time
 from typing import List, Optional
+
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -29,10 +32,8 @@ except ImportError:
     COMPILE_FLAGS = ["-O3", "-std=c++17", "-fPIC", "-march=native"]
     LINK_FLAGS    = ["-shared"]
 
-
 # ---------------------------------------------------------------------------
-# ctypes shorthands — NOTE: named with leading underscore so pickle can find
-# them via the module dict when spawn context is used.
+# ctypes shorthands
 # ---------------------------------------------------------------------------
 _dp   = ctypes.POINTER(ctypes.c_double)
 _fp   = ctypes.POINTER(ctypes.c_float)
@@ -42,7 +43,6 @@ _int  = ctypes.c_int
 _dbl  = ctypes.c_double
 _flt  = ctypes.c_float
 
-# Serialisable string tags used to transfer sig info across process boundaries
 _TAG_TO_CTYPE = {
     "dp":   _dp,
     "fp":   _fp,
@@ -53,12 +53,11 @@ _TAG_TO_CTYPE = {
     "flt":  _flt,
 }
 
+
 def _ctype_tag(ct) -> str:
-    """Return a string tag for a ctypes type so it survives pickling."""
     for tag, v in _TAG_TO_CTYPE.items():
         if ct is v:
             return tag
-    # Fallback: map by name
     name = getattr(ct, "__name__", "") or ""
     if "double" in name and "LP" in name:   return "dp"
     if "float"  in name and "LP" in name:   return "fp"
@@ -68,13 +67,13 @@ def _ctype_tag(ct) -> str:
     if "float"  in name:                    return "flt"
     return "int"
 
+
 def _serialise_sig(sig) -> list:
-    """Convert [(name, c_typed, c_typef), ...] to [(name, tag_d, tag_f), ...].
-    These plain tuples of strings are safely picklable."""
-    return [(name, _ctype_tag(c_typed), _ctype_tag(c_typef)) for name, c_typed, c_typef in sig]
+    return [(name, _ctype_tag(c_typed), _ctype_tag(c_typef))
+            for name, c_typed, c_typef in sig]
+
 
 def _to_carg(val, tag: str, is_float: bool):
-    import numpy as np
     ct = _TAG_TO_CTYPE[tag]
     if isinstance(val, np.ndarray):
         if ct is _i64p:
@@ -94,8 +93,6 @@ def _to_carg(val, tag: str, is_float: bool):
 
 
 def _build_call_args(serial_sig: list, pool: dict, is_float: bool):
-    """Walk a serialised signature and resolve each param from pool.
-    Returns (call_args, missing_param_names)."""
     call_args: list = []
     missing:   list = []
     for param_name, tag_d, tag_f in serial_sig:
@@ -106,7 +103,6 @@ def _build_call_args(serial_sig: list, pool: dict, is_float: bool):
         call_args.append(_to_carg(pool[param_name], tag, is_float))
     return call_args, missing
 
-
 # ---------------------------------------------------------------------------
 # Incremental-build helpers
 # ---------------------------------------------------------------------------
@@ -114,8 +110,10 @@ def _build_call_args(serial_sig: list, pool: dict, is_float: bool):
 def obj_path(src: pathlib.Path, build_dir: pathlib.Path) -> pathlib.Path:
     return build_dir / f"{src.stem}.o"
 
+
 def dep_path(obj: pathlib.Path) -> pathlib.Path:
     return obj.with_suffix(".d")
+
 
 def parse_dep_file(dep: pathlib.Path) -> List[pathlib.Path]:
     if not dep.exists():
@@ -123,6 +121,7 @@ def parse_dep_file(dep: pathlib.Path) -> List[pathlib.Path]:
     _, _, rhs = dep.read_text().partition(":")
     rhs = rhs.replace("\\", " ")
     return [pathlib.Path(p) for p in rhs.split() if p]
+
 
 def needs_rebuild(src: pathlib.Path, obj: pathlib.Path) -> bool:
     if not obj.exists():
@@ -139,35 +138,88 @@ def needs_rebuild(src: pathlib.Path, obj: pathlib.Path) -> bool:
         return False
     return src.stat().st_mtime > obj_mtime
 
-
 # ---------------------------------------------------------------------------
 # Vectorization-report helpers
 # ---------------------------------------------------------------------------
-
-VECRE = re.compile(
-    r"optimized loop vectorized"
-    r"|vectorized loop"
-    r"|LOOP AUTO-VECTORIZED",
+_VEC_OPTIMIZED_RE = re.compile(
+    r"remark.*vectorized loop"
+    r"|note.*loop vectorized"
+    r"|optimized.*loop vectorized"
+    r"|note.*vectorized (?!0\b)\d+ loop"
+    r"|LOOP AUTO-VECTORIZED"
+    r"|loop vectorized",
     re.IGNORECASE,
 )
+_VEC_MISSED_RE = re.compile(
+    r"remark.*loop not vectorized"
+    r"|missed.*loop"
+    r"|couldn.t vectorize"
+    r"|not vectorized"
+    r"|missed:.*loop",
+    re.IGNORECASE,
+)
+
+VECRE = _VEC_OPTIMIZED_RE
+
+
+def _parse_vec_from_rpt(rpt_path: pathlib.Path) -> dict:
+    if not rpt_path.exists():
+        return {"vectorized": False, "vec_count": 0, "missed_count": 0, "sample_remarks": []}
+    text = rpt_path.read_text(errors="replace")
+    vec_lines    = [l.strip() for l in text.splitlines() if _VEC_OPTIMIZED_RE.search(l)]
+    missed_lines = [l.strip() for l in text.splitlines() if _VEC_MISSED_RE.search(l)]
+    return {
+        "vectorized":     len(vec_lines) > 0,
+        "vec_count":      len(vec_lines),
+        "missed_count":   len(missed_lines),
+        "sample_remarks": (vec_lines + missed_lines)[:5],
+    }
+
 
 def vec_report_flag() -> List[str]:
     cxx = CXX.lower()
     if "clang" in cxx:
-        return ["-Rpass=loop-vectorize", "-Rpass-missed=loop-vectorize"]
+        return [
+            "-Rpass=loop-vectorize",
+            "-Rpass-missed=loop-vectorize",
+            "-Rpass-analysis=loop-vectorize",
+        ]
     if "icpx" in cxx or "icpc" in cxx:
-        return ["-qopt-report=2", "-qopt-report-phase=vec"]
+        return [
+            "-Rpass=loop-vectorize",
+            "-Rpass-missed=loop-vectorize",
+            "-Rpass-analysis=loop-vectorize",
+        ]
     return ["-fopt-info-vec-all"]
+
 
 def parse_vec_reports(build_dir) -> dict:
     build_dir = pathlib.Path(build_dir)
     results: dict = {}
     for rpt in sorted(build_dir.rglob("*.rpt")):
-        kernel = re.sub(r"[df](single)?$", "", rpt.stem, flags=re.IGNORECASE)
+        kernel = re.sub(r"_[df](_single)?$", "", rpt.stem, flags=re.IGNORECASE)
         text   = rpt.read_text(errors="replace")
-        results[kernel] = results.get(kernel, False) or bool(VECRE.search(text))
+        results[kernel] = results.get(kernel, False) or bool(_VEC_OPTIMIZED_RE.search(text))
     return results
 
+
+def parse_vec_reports_detailed(build_dir) -> dict:
+    build_dir = pathlib.Path(build_dir)
+    results: dict = {}
+    for rpt in sorted(build_dir.rglob("*.rpt")):
+        kernel = re.sub(r"_[df](_single)?$", "", rpt.stem, flags=re.IGNORECASE)
+        info   = _parse_vec_from_rpt(rpt)
+        if kernel not in results:
+            results[kernel] = info
+        else:
+            existing = results[kernel]
+            results[kernel] = {
+                "vectorized":     existing["vectorized"] or info["vectorized"],
+                "vec_count":      existing["vec_count"]  + info["vec_count"],
+                "missed_count":   existing["missed_count"] + info["missed_count"],
+                "sample_remarks": (existing["sample_remarks"] + info["sample_remarks"])[:5],
+            }
+    return results
 
 # ---------------------------------------------------------------------------
 # Compile / link
@@ -232,7 +284,6 @@ def compile_library(
     jobs: int = 1,
     vec_report: bool = False,
 ) -> pathlib.Path:
-    """Compile every kernel under *root* and link them into one .so."""
     root = pathlib.Path(root).resolve()
     cpps = sorted(root.rglob(pattern))
 
@@ -258,7 +309,6 @@ def compile_library(
     return link_library(objects, build_dir, so_name, extra_link_flags)
 
 
-# Alias so that __init__.py `from .compile_cpp import compile_cpp_library` keeps working
 compile_cpp_library = compile_library
 
 
@@ -266,129 +316,107 @@ def load_cpp_library(root, build_dir, so_name: str, **kwargs) -> ctypes.CDLL:
     so = compile_library(root, build_dir, so_name, **kwargs)
     return ctypes.CDLL(str(so))
 
-
 # ---------------------------------------------------------------------------
 # Array pool
 # ---------------------------------------------------------------------------
 
 def _make_array_pool(len_1d: int, dtype):
-    import numpy as np
-    rng  = np.random.default_rng(42)
-    n_2d = len_1d * len_1d
-
-    SSYM   = 4
+    rng     = np.random.default_rng(42)
+    n_2d    = len_1d * len_1d
+    SSYM    = 4
     dim_2d  = min(len_1d, 4096)
     dim_3d  = 32
     arr_3d  = rng.random((dim_3d, dim_3d, dim_3d)).astype(dtype)
     idx_arr = np.mod(np.arange(len_1d, dtype=np.int64) * 7 + 3, len_1d)
     return {
-        # 1-D float arrays
-        "a":             rng.random(len_1d).astype(dtype),
-        "b":             rng.random(len_1d).astype(dtype),
-        "c":             rng.random(len_1d).astype(dtype),
-        "d":             rng.random(len_1d).astype(dtype),
-        "e":             rng.random(len_1d).astype(dtype),
-        "q":             rng.random(len_1d).astype(dtype),
-        "x":             rng.random(len_1d).astype(dtype),
-        "xx":            rng.random(len_1d).astype(dtype),
-        "y":             rng.random(len_1d).astype(dtype),
-        "z":             rng.random(len_1d).astype(dtype),
-        "out":           np.zeros(len_1d, dtype=dtype),
-        # 2-D (flattened)
-        "aa":            rng.random(n_2d).astype(dtype),
-        "bb":            rng.random(n_2d).astype(dtype),
-        "cc":            rng.random(n_2d).astype(dtype),
-        "dd":            rng.random(n_2d).astype(dtype),
-        "flat":          rng.random(len_1d).astype(dtype),
-        "flat_2d_array": rng.random(n_2d).astype(dtype),
-        # integer index arrays
-        "ip":            rng.integers(0, len_1d, size=len_1d).astype("int32"),
-        "indx":          rng.integers(0, len_1d, size=len_1d).astype("int32"),
-        # reduction outputs
-        "sumout":    np.zeros(1, dtype=dtype),
-        "result":    np.zeros(1, dtype=dtype),
-        "resultout": np.zeros(1, dtype=dtype),
-        "dot":       np.zeros(1, dtype=dtype),
-        "dotout":    np.zeros(1, dtype=dtype),
-        # integer scalars
-        "iterations": len_1d,
-        "len_1d":     len_1d,
-        "len_2d":     len_1d,
-        "LEN_1D":     len_1d,
-        "LEN_2D": dim_2d, 
-        "LEN_3D": dim_3d,
-        "len_3d": dim_3d,
-        "ntimes": len_1d,
-        "iterations": len_1d,
-        "n1":         len_1d // 4,
-        "n3":         len_1d // 4,
-        "inc":        1,
-        "k":          0,
-        "j":          0,
-        "vlen":       8,
-        "M":          len_1d // 2,
-        "m": len_1d,
-        "threshold":  0,
-        "sum_out": np.zeros(1, dtype=dtype),
-        "dot_out": np.zeros(1, dtype=dtype),
-        "result_out": np.zeros(1, dtype=dtype),
-        # float scalars
-        "s":     1.0,
-        "s1":    1.0,
-        "s2":    2.0,
-        "scale": 1.0,
-        "ssym":  3,
-        # tsvc_2_5
-        "src": rng.random(len_1d).astype(dtype),
-        "dst": rng.random(SSYM * len_1d).astype(dtype),
-        "idx": idx_arr.copy(),
+        "a":              rng.random(len_1d).astype(dtype),
+        "b":              rng.random(len_1d).astype(dtype),
+        "c":              rng.random(len_1d).astype(dtype),
+        "d":              rng.random(len_1d).astype(dtype),
+        "e":              rng.random(len_1d).astype(dtype),
+        "q":              rng.random(len_1d).astype(dtype),
+        "x":              rng.random(len_1d).astype(dtype),
+        "xx":             rng.random(len_1d).astype(dtype),
+        "y":              rng.random(len_1d).astype(dtype),
+        "z":              rng.random(len_1d).astype(dtype),
+        "out":            np.zeros(len_1d, dtype=dtype),
+        "aa":             rng.random(n_2d).astype(dtype),
+        "bb":             rng.random(n_2d).astype(dtype),
+        "cc":             rng.random(n_2d).astype(dtype),
+        "dd":             rng.random(n_2d).astype(dtype),
+        "flat":           rng.random(len_1d).astype(dtype),
+        "flat_2d_array":  rng.random(n_2d).astype(dtype),
+        "ip":             rng.integers(0, len_1d, size=len_1d).astype("int32"),
+        "indx":           rng.integers(0, len_1d, size=len_1d).astype("int32"),
+        "sumout":         np.zeros(1, dtype=dtype),
+        "result":         np.zeros(1, dtype=dtype),
+        "resultout":      np.zeros(1, dtype=dtype),
+        "dot":            np.zeros(1, dtype=dtype),
+        "dotout":         np.zeros(1, dtype=dtype),
+        "iterations":     len_1d,
+        "len_1d":         len_1d,
+        "len_2d":         len_1d,
+        "LEN_1D":         len_1d,
+        "LEN_2D":         dim_2d,
+        "LEN_3D":         dim_3d,
+        "len_3d":         dim_3d,
+        "ntimes":         len_1d,
+        "n1":             len_1d // 4,
+        "n3":             len_1d // 4,
+        "inc":            1,
+        "k":              0,
+        "j":              0,
+        "vlen":           8,
+        "M":              len_1d // 2,
+        "m":              len_1d,
+        "threshold":      0,
+        "sum_out":        np.zeros(1, dtype=dtype),
+        "dot_out":        np.zeros(1, dtype=dtype),
+        "result_out":     np.zeros(1, dtype=dtype),
+        "s":              1.0,
+        "s1":             1.0,
+        "s2":             2.0,
+        "scale":          1.0,
+        "ssym":           3,
+        "src":            rng.random(len_1d).astype(dtype),
+        "dst":            rng.random(SSYM * len_1d).astype(dtype),
+        "idx":            idx_arr.copy(),
         "threshold_data": rng.random(len_1d).astype(dtype),
-        "mask": rng.integers(0, 2, size=len_1d, dtype=np.int64),
-        "t": 1.0,
-        "a_3d": arr_3d.ravel(), "b_3d": arr_3d.ravel().copy(),
-        # jacobi2d_double_tiled_sym_d: two symbolic tile sizes
-        "t1": 64,
-        "t2": 8,
+        "mask":           rng.integers(0, 2, size=len_1d, dtype=np.int64),
+        "t":              1.0,
+        "a_3d":           arr_3d.ravel(),
+        "b_3d":           arr_3d.ravel().copy(),
+        "t1":             64,
+        "t2":             8,
     }
-
 
 # ---------------------------------------------------------------------------
 # Signature / bindings loader
 # ---------------------------------------------------------------------------
 
 def _load_signatures(root: pathlib.Path, so_path: pathlib.Path):
-    """Infer the correct bindings file from 'tsvc_2_5' or 'tsvc_2' in root."""
     import importlib.util
-
     root_str = str(root)
-
-    # Check tsvc_2_5 first — it must come before tsvc_2 because tsvc_2_5
-    # also contains the substring "tsvc_2".
     if "tsvc_2_5" in root_str:
         bindings_rel = "tsvc_2_5/tsvc_2_5_bindings.py"
     elif "tsvc_2" in root_str:
         bindings_rel = "tsvc_2/tsvc_bindings.py"
     else:
-        print(f"  [timing] ERROR: cannot infer TSVC version from root path: {root}",
-              flush=True)
+        print(f"  [timing] ERROR: cannot infer TSVC version from root path: {root}", flush=True)
         return None
 
-    # Anchor the bindings file relative to cwd (where the user runs the script from)
     bindings_path = pathlib.Path.cwd() / bindings_rel
-
     if not bindings_path.exists():
         print(f"  [timing] ERROR: bindings file not found: {bindings_path}", flush=True)
         return None
 
     spec = importlib.util.spec_from_file_location("_tsvc_bindings_tmp", bindings_path)
     mod  = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    spec.loader.exec_module(mod)
     sigs = getattr(mod, "SIGNATURES", None)
-
     if not sigs:
         print(f"  [timing] ERROR: no SIGNATURES found in {bindings_path}", flush=True)
         return None
-
     print(f"  location of signature to load:  {bindings_path}", flush=True)
     return sigs
 
@@ -398,73 +426,98 @@ def infer_precision_from_pattern(pattern: str) -> str:
         return "float"
     return "double"
 
-
 # ---------------------------------------------------------------------------
-# Per-kernel debug child  (subprocess-isolated, mirrors DaCe version)
-# Accepts only plain-Python picklable args: strings, dicts of numpy arrays
-# and plain ints/floats — no ctypes types.
+# Per-kernel subprocess worker  (mirrors DaCe's _time_one_kernel)
 # ---------------------------------------------------------------------------
 
-def _run_one_kernel_child(so_path_str: str, sym: str,
-                          serial_sig: list, pool: dict,
-                          is_float: bool, reps: int,
-                          verbose: bool = False):
+def _time_one_kernel_worker(args_tuple):
     """
-    Runs inside a forked/spawned child process.  Times the kernel *reps* times.
-    Diagnostic output is gated behind *verbose* (only set when --debug-kernel is used).
-    serial_sig is a list of (param_name, tag_d, tag_f) — plain strings, always picklable.
+    Runs in an isolated subprocess via Pool.apply_async.
+    Times a single kernel symbol from the already-linked .so.
+    Returns (sym, base, (median_ns, min_ns, stdev_ns, vec_info, raw_timings)) on success,
+    or (sym, None, error_message) on failure.
     """
-    import numpy as np
+    so_path_str, sym, base, serial_sig, pool_data, is_float, reps, vec_info = args_tuple
 
-    if verbose:
-        sig_desc  = ", ".join(f"{n}, {(tf if is_float else td)}"
-                              for n, td, tf in serial_sig)
-        pool_keys = ", ".join(n for n, *_ in serial_sig if n in pool)
-        print(f"child sig:          {sig_desc}", flush=True)
-        print(f"child pool keys:    {pool_keys}", flush=True)
+    import ctypes, statistics, numpy as np
 
-    call_args, missing = _build_call_args(serial_sig, pool, is_float)
+    _dp_w   = ctypes.POINTER(ctypes.c_double)
+    _fp_w   = ctypes.POINTER(ctypes.c_float)
+    _ip_w   = ctypes.POINTER(ctypes.c_int)
+    _i64p_w = ctypes.POINTER(ctypes.c_int64)
+    _int_w  = ctypes.c_int
+    _dbl_w  = ctypes.c_double
+    _flt_w  = ctypes.c_float
+
+    _TAG_W = {
+        "dp": _dp_w, "fp": _fp_w, "ip": _ip_w, "i64p": _i64p_w,
+        "int": _int_w, "dbl": _dbl_w, "flt": _flt_w,
+    }
+
+    def _to_carg_w(val, tag):
+        ct = _TAG_W[tag]
+        if isinstance(val, np.ndarray):
+            if ct is _i64p_w:
+                return val.astype(np.int64, copy=False).ctypes.data_as(_i64p_w)
+            if is_float and val.dtype == np.float64:
+                val = val.astype(np.float32)
+            elif not is_float and val.dtype == np.float32:
+                val = val.astype(np.float64)
+            if ct is _ip_w:
+                return val.astype("int32", copy=False).ctypes.data_as(_ip_w)
+            return val.ctypes.data_as(_fp_w if is_float else _dp_w)
+        if ct is _int_w:
+            return _int_w(int(val))
+        if ct in (_dbl_w, _flt_w):
+            return _flt_w(float(val)) if is_float else _dbl_w(float(val))
+        return val
+
+    call_args = []
+    missing   = []
+    for param_name, tag_d, tag_f in serial_sig:
+        tag = tag_f if is_float else tag_d
+        if param_name not in pool_data:
+            missing.append(param_name)
+            continue
+        call_args.append(_to_carg_w(pool_data[param_name], tag))
     if missing:
-        if verbose:
-            print(f"UNRESOLVED: {', '.join(missing)}", flush=True)
-        sys.exit(2)
-
-    if verbose:
-        print(f"child callargs types: {', '.join(type(a).__name__ for a in call_args)}",
-              flush=True)
+        return sym, None, f"unresolved args: {missing}"
 
     try:
         lib = ctypes.CDLL(so_path_str, ctypes.RTLD_GLOBAL)
     except OSError as exc:
-        print(f"LOAD ERROR: {exc}", flush=True)
-        sys.exit(3)
+        return sym, None, f"load .so failed: {exc}"
 
     try:
         fn = getattr(lib, sym)
     except AttributeError:
-        print(f"SYMBOL NOT FOUND: {sym}", flush=True)
-        sys.exit(4)
+        return sym, None, f"symbol not found: {sym}"
 
     fn.restype = None
-
     timens_buf = np.zeros(1, dtype=np.int64)
-    timens_ptr = timens_buf.ctypes.data_as(_i64p)
-    timings    = []
-    for _ in range(reps):
-        fn(*call_args, timens_ptr)
-        timings.append(int(timens_buf[0]))
+    timens_ptr = timens_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_int64))
+
+    try:
+        fn(*call_args, timens_ptr)  # warm-up
+        timings = []
+        for _ in range(reps):
+            fn(*call_args, timens_ptr)
+            timings.append(int(timens_buf[0]))
+    except Exception as exc:
+        return sym, None, f"run failed: {exc}"
 
     med = statistics.median(timings)
     mn  = min(timings)
-    sd  = statistics.stdev(timings) if len(timings) > 1 else 0.0
-    if verbose:
-        print(f"OK median={med:.0f}ns min={mn:.0f}ns stdev={sd:.0f}ns", flush=True)
-    sys.exit(0)
-
+    sd  = statistics.stdev(timings) if len(timings) > 1 else 0
+    # ---- return raw timings alongside aggregates ----
+    return sym, base, (med, mn, sd, vec_info, timings)
 
 # ---------------------------------------------------------------------------
-# Timing phase
+# Timing phase — DaCe-style: one kernel per Pool, hard timeout, CSV via write_text
 # ---------------------------------------------------------------------------
+
+_DEFAULT_KERNEL_TIMEOUT = 120
+
 
 def run_timing_phase(
     so_path: pathlib.Path,
@@ -473,18 +526,11 @@ def run_timing_phase(
     pattern: str,
     reps: int,
     len_1d: int,
+    build_dir: Optional[pathlib.Path] = None,
+    kernel_timeout: int = _DEFAULT_KERNEL_TIMEOUT,
     debug_kernel: Optional[str] = None,
+    raw_csv: Optional[pathlib.Path] = None,  # NEW: path for raw timings CSV
 ) -> None:
-    """
-    Load the compiled .so and time every kernel in *signatures*.
-    Each kernel is probed in an isolated subprocess first so a SIGSEGV
-    cannot crash the parent.  Uses 'fork' on macOS/Linux (no pickle needed);
-    falls back to 'spawn' with fully picklable serialised signatures.
-    """
-    import csv
-    import multiprocessing as mp
-    import numpy as np
-
     so_path  = pathlib.Path(so_path)
     out_csv  = pathlib.Path(out_csv)
     is_float = infer_precision_from_pattern(pattern) == "float"
@@ -492,11 +538,11 @@ def run_timing_phase(
     suffix   = "f" if is_float else "d"
     sym_suffix = f"_{suffix}_single" if "single" in pattern else f"_{suffix}"
 
-    pool = _make_array_pool(len_1d, dtype)
+    pool_data = _make_array_pool(len_1d, dtype)
 
-    # Prefer 'fork' — no pickle needed, much faster startup
-    mp_ctx_name = "fork" if sys.platform != "win32" else "spawn"
-    ctx = mp.get_context(mp_ctx_name)
+    vec_info_map: dict = {}
+    if build_dir is not None:
+        vec_info_map = parse_vec_reports_detailed(build_dir)
 
     print(f"  [timing] Using SIGNATURES ({len(signatures)} kernels)", flush=True)
 
@@ -510,104 +556,109 @@ def run_timing_phase(
             return
         sym        = f"{base}{sym_suffix}"
         serial_sig = _serialise_sig(sig)
-        _run_one_kernel_child(str(so_path), sym, serial_sig, pool, is_float, reps,
-                              verbose=True)
+        vec_info   = vec_info_map.get(base) or {"vectorized": False, "vec_count": 0, "missed_count": 0}
+        work_item  = (str(so_path), sym, base, serial_sig, pool_data, is_float, reps, vec_info)
+        result     = _time_one_kernel_worker(work_item)
+        sym_r, base_r, payload = result
+        if base_r is None:
+            print(f"  [debug] FAIL {sym_r} — {payload}", flush=True)
+        else:
+            med, mn, sd, vi, raw = payload
+            print(f"  [debug] ok  {sym_r}  median={med/1e3:.1f}µs  min={mn/1e3:.1f}µs", flush=True)
         return
 
     # ---- full sweep ----
-    n_timed = n_skipped = n_crashed = 0
     rows: list = []
+    raw_rows: list = []  # NEW: accumulates (kernel, rep_index, timing_ns) tuples
+    n_skipped  = 0
 
-    # Pre-load .so once for the in-process timing after the subprocess probe passes
-    try:
-        lib = ctypes.CDLL(str(so_path), ctypes.RTLD_GLOBAL)
-    except OSError as exc:
-        print(f"  [timing] Cannot load {so_path}: {exc}", flush=True)
-        return
-
+    work_items = []
     for base, sig in sorted(signatures.items()):
         sym        = f"{base}{sym_suffix}"
         serial_sig = _serialise_sig(sig)
-        print(f"  [timing] running {sym} ...", end=" ", flush=True)
+        vec_info   = (
+            vec_info_map.get(base)
+            or vec_info_map.get(sym)
+            or {"vectorized": False, "vec_count": 0, "missed_count": 0}
+        )
+        work_items.append((str(so_path), sym, base, serial_sig, pool_data, is_float, reps, vec_info))
 
-        # Quick Python-side unresolved check
-        _, missing = _build_call_args(serial_sig, pool, is_float)
-        if missing:
-            print(f"SKIP — unresolved args: {', '.join(missing)}", flush=True)
-            n_skipped += 1
-            continue
+    mp_ctx = multiprocessing.get_context("fork" if sys.platform != "win32" else "spawn")
+    mp_pool = mp_ctx.Pool(processes=1)
 
-        # Subprocess probe — catches SIGSEGV without killing parent
-        proc = ctx.Process(target=_run_one_kernel_child,
-                           args=(str(so_path), sym, serial_sig, pool, is_float, 1, False),
-                           daemon=True)
-        proc.start()
-        proc.join(timeout=30)
-        ec = proc.exitcode
+    try:
+        for item in work_items:
+            sym  = item[1]
+            base = item[2]
+            print(f"  [timing] running {sym} ...", end=" ", flush=True)
 
-        if ec == 2:
-            print("SKIP (unresolved args in child)", flush=True)
-            n_skipped += 1
-            continue
-        if ec != 0:
-            print(f"CRASH exit {ec}", flush=True)
-            if debug_kernel is not None:
-                call_args2, _ = _build_call_args(serial_sig, pool, is_float)
-                sig_desc   = [(n, tf if is_float else td) for n, td, tf in serial_sig]
-                pool_keys  = [n for n, *_ in serial_sig if n in pool]
-                call_types = [type(a).__name__ for a in call_args2]
-                print(f"    child sig:            {sig_desc}", flush=True)
-                print(f"    child pool keys:      {pool_keys}", flush=True)
-                print(f"    child callargs types: {call_types}", flush=True)
-            n_crashed += 1
-            continue
+            async_result = mp_pool.apply_async(_time_one_kernel_worker, (item,))
+            try:
+                sym_r, base_r, payload = async_result.get(timeout=kernel_timeout)
 
-        # Subprocess probe passed → safe to time in-process
-        try:
-            fn = getattr(lib, sym)
-            fn.restype = None
+                if base_r is None:
+                    print(f"SKIP — {payload}", flush=True)
+                    n_skipped += 1
+                else:
+                    med, mn, sd, vec_info, timings = payload  # unpack raw timings
+                    vec_tag = "VEC" if vec_info["vectorized"] else "---"
+                    print(f"ok  median={med/1e3:.1f}µs  min={mn/1e3:.1f}µs  [{vec_tag}]", flush=True)
+                    rows.append((sym_r, med, mn, sd, vec_info))
+                    # Accumulate raw timings rows
+                    for rep_idx, t_ns in enumerate(timings):
+                        raw_rows.append((sym_r, rep_idx, t_ns))
 
-            call_args, _ = _build_call_args(serial_sig, pool, is_float)
-            timens_buf   = np.zeros(1, dtype=np.int64)
-            timens_ptr   = timens_buf.ctypes.data_as(_i64p)
-            timings      = []
-            for _ in range(reps):
-                fn(*call_args, timens_ptr)
-                timings.append(int(timens_buf[0]))
+            except multiprocessing.TimeoutError:
+                print(f"SKIP — timed out after {kernel_timeout}s", flush=True)
+                n_skipped += 1
+                mp_pool.terminate()
+                mp_pool.join()
+                mp_pool = mp_ctx.Pool(processes=1)
 
-            med = statistics.median(timings)
-            mn  = min(timings)
-            sd  = statistics.stdev(timings) if len(timings) > 1 else 0.0
-            print(f"ok  median={med/1e3:.1f}µs  min={mn/1e3:.1f}µs", flush=True)
-            rows.append({"kernel": sym,
-                         "median_ns": f"{med:.0f}",
-                         "min_ns":    f"{mn:.0f}",
-                         "stdev_ns":  f"{sd:.0f}"})
-            n_timed += 1
-        except Exception as exc:
-            if debug_kernel is not None:
-                print(f"CRASH (in-process): {exc}", flush=True)
-            else:
-                print(f"CRASH", flush=True)
-            n_crashed += 1
+            except Exception as exc:
+                print(f"SKIP — worker error: {exc}", flush=True)
+                n_skipped += 1
+                mp_pool.terminate()
+                mp_pool.join()
+                mp_pool = mp_ctx.Pool(processes=1)
 
-    # Write CSV
+    finally:
+        mp_pool.terminate()
+        mp_pool.join()
+
+    # Write aggregated summary CSV (unchanged format)
     out_csv.parent.mkdir(parents=True, exist_ok=True)
-    with out_csv.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["kernel","median_ns","min_ns","stdev_ns"])
-        writer.writeheader()
-        writer.writerows(rows)
+    lines = ["kernel,median_ns,min_ns,stdev_ns,vectorized,vec_count,missed_count"]
+    for kernel, med, mn, std, vec_info in sorted(rows, key=lambda r: r[0]):
+        lines.append(
+            f"{kernel},{med:.2f},{mn:.2f},{std:.2f},"
+            f"{'1' if vec_info['vectorized'] else '0'},"
+            f"{vec_info['vec_count']},"
+            f"{vec_info['missed_count']}"
+        )
+    out_csv.write_text("\n".join(lines) + "\n")
+
+    # Write raw timings CSV
+    # Derive raw_csv path from out_csv if not explicitly provided
+    if raw_csv is None:
+        raw_csv = out_csv.with_name(out_csv.stem + "_raw_timings.csv")
+    raw_csv = pathlib.Path(raw_csv)
+    raw_csv.parent.mkdir(parents=True, exist_ok=True)
+    raw_lines = ["kernel,rep,timing_ns"]
+    for kernel, rep_idx, t_ns in raw_rows:
+        raw_lines.append(f"{kernel},{rep_idx},{t_ns}")
+    raw_csv.write_text("\n".join(raw_lines) + "\n")
 
     print(
-        f"  [timing] {n_timed} kernels timed, "
-        f"{n_skipped} skipped, {n_crashed} crashed"
+        f"  [timing] {len(rows)} kernels timed, {n_skipped} skipped"
         f" -> {out_csv}",
         flush=True,
     )
+    print(f"  [timing] raw timings ({len(raw_rows)} rows) -> {raw_csv}", flush=True)
 
 
 # ---------------------------------------------------------------------------
-# main_compile_cpp  — argparse entry point called by tsvc_2 / tsvc_2_5
+# main_compile_cpp
 # ---------------------------------------------------------------------------
 
 def main_compile_cpp(
@@ -620,8 +671,7 @@ def main_compile_cpp(
     ap = argparse.ArgumentParser(
         description="Compile per-kernel .cpp files into a single shared library."
     )
-    ap.add_argument("root",              nargs="?", default=default_root,
-                    help="Root directory of kernel sources.")
+    ap.add_argument("root",              nargs="?", default=default_root)
     ap.add_argument("-b", "--build-dir",           default=default_build_dir)
     ap.add_argument("-o", "--so-name",             default=default_so_name)
     ap.add_argument("-f", "--force",  action="store_true")
@@ -630,20 +680,21 @@ def main_compile_cpp(
     ap.add_argument("--vec-report",   action="store_true",
                     help="Capture vectorization remarks into build_dir/*.rpt files.")
     ap.add_argument("--vec-report-out", default=None, metavar="FILE",
-                    help="Write vec-report summary to FILE.")
-    # Timing flags
+                    help="Write vec-report summary text to FILE.")
     ap.add_argument("--time",         action="store_true",
-                    help="After linking, load the .so and time every kernel.")
+                    help="After linking, time every kernel and write merged CSV.")
     ap.add_argument("--timing-out",   default=None, metavar="FILE",
-                    help="Write timing CSV to FILE.")
-    ap.add_argument("--reps",         type=int, default=30, metavar="N",
-                    help="Timing repetitions per kernel (default 30).")
-    ap.add_argument("--len-1d",       type=int, default=1024, metavar="N",
-                    dest="len_1d",
-                    help="Array length used during timing (default 1024).")
-    # Debug single kernel — mirrors DaCe --debug-kernel
-    ap.add_argument("--debug-kernel", default=None, metavar="NAME",
-                    help="Run only this one kernel with full verbose child diagnostics.")
+                    help="Write merged timing+vec CSV to FILE.")
+    ap.add_argument("--raw-timing-out", default=None, metavar="FILE",
+                    help="Write raw per-repetition timing CSV to FILE. "
+                         "Defaults to <timing-out stem>_raw_timings.csv.")  # NEW
+    ap.add_argument("--reps",         type=int, default=30, metavar="N")
+    ap.add_argument("--len-1d",       type=int, default=1024, metavar="N", dest="len_1d")
+    ap.add_argument("--kernel-timeout", type=int, default=_DEFAULT_KERNEL_TIMEOUT,
+                    metavar="SEC", dest="kernel_timeout",
+                    help="Per-kernel timeout in seconds (default 120). "
+                         "Hanging kernels are skipped and the pool is recycled.")
+    ap.add_argument("--debug-kernel", default=None, metavar="NAME")
 
     args = ap.parse_args(argv)
     if args.debug_kernel:
@@ -660,7 +711,7 @@ def main_compile_cpp(
     if args.jobs > 1:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         objects: List[pathlib.Path] = []
-        compiled = cached = 0
+        compiled = 0
         with ThreadPoolExecutor(max_workers=args.jobs) as tpool:
             futs = {
                 tpool.submit(
@@ -678,7 +729,7 @@ def main_compile_cpp(
                 except subprocess.CalledProcessError as e:
                     print(f"FAIL {cpp.name}: {e}")
                     compiled += 1
-        print(f"Compile {compiled} compiled, {cached} cached", flush=True)
+        print(f"Compiled {compiled} objects", flush=True)
     else:
         objects = [
             compile_object(cpp, args.build_dir,
@@ -691,26 +742,29 @@ def main_compile_cpp(
 
     # ---- vec report ----
     if args.vec_report:
-        results = parse_vec_reports(args.build_dir)
-        if results:
-            vec_count   = sum(1 for v in results.values() if v)
-            header      = f"Vectorization report {vec_count}/{len(results)} kernels vectorized"
+        vec_detailed = parse_vec_reports_detailed(args.build_dir)
+        if vec_detailed:
+            vec_count   = sum(1 for v in vec_detailed.values() if v["vectorized"])
+            header      = f"Vectorization report {vec_count}/{len(vec_detailed)} kernels vectorized"
             lines       = [header]
-            for name, vec in sorted(results.items()):
-                lines.append(f"  {'VEC' if vec else '---'}  {name}")
+            for name, info in sorted(vec_detailed.items()):
+                tag = "VEC" if info["vectorized"] else "---"
+                lines.append(
+                    f"  [{tag}] {name}  "
+                    f"(vec={info['vec_count']}, missed={info['missed_count']})"
+                )
             report_text = "\n".join(lines)
             print(report_text)
 
             out_rpt = (
                 pathlib.Path(args.vec_report_out) if args.vec_report_out
-                else build_dir / f"{pathlib.Path(args.so_name).stem}.vecreport.txt"
+                else build_dir / f"{pathlib.Path(args.so_name).stem}.vec_report.txt"
             )
             out_rpt.parent.mkdir(parents=True, exist_ok=True)
             out_rpt.write_text(report_text)
             print(f"Saved vec report -> {out_rpt}", flush=True)
         else:
-            print("vec-report: No .rpt files found — recompile to generate them.",
-                  flush=True)
+            print("vec-report: No .rpt files found — recompile to generate them.", flush=True)
 
     # ---- timing phase ----
     if args.time:
@@ -718,23 +772,32 @@ def main_compile_cpp(
             pathlib.Path(args.timing_out) if args.timing_out
             else build_dir / f"{pathlib.Path(args.so_name).stem}.timing_report.csv"
         )
+        raw_timing_out = (
+            pathlib.Path(args.raw_timing_out) if args.raw_timing_out
+            else None  # run_timing_phase will auto-derive from timing_out
+        )
         signatures = _load_signatures(root, so)
         if signatures is None:
             print("  [timing] WARNING: could not locate tsvc_*_bindings.py — "
                   "timing phase skipped.", flush=True)
         else:
             print(
-                f"  Running timing phase ({args.reps} reps, len_1d={args.len_1d}) ...",
+                f"  Running timing phase "
+                f"({args.reps} reps, len_1d={args.len_1d}, "
+                f"timeout={args.kernel_timeout}s/kernel) ...",
                 flush=True,
             )
             run_timing_phase(
-                so_path      = so,
-                signatures   = signatures,
-                out_csv      = timing_out,
-                pattern      = args.pattern,
-                reps         = args.reps,
-                len_1d       = args.len_1d,
-                debug_kernel = args.debug_kernel,
+                so_path        = so,
+                signatures     = signatures,
+                out_csv        = timing_out,
+                pattern        = args.pattern,
+                reps           = args.reps,
+                len_1d         = args.len_1d,
+                build_dir      = build_dir,
+                kernel_timeout = args.kernel_timeout,
+                debug_kernel   = args.debug_kernel,
+                raw_csv        = raw_timing_out,  # NEW
             )
 
     print(f"Done in {_time.perf_counter() - t0:.1f}s", flush=True)
