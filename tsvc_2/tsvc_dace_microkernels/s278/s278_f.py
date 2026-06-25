@@ -13,11 +13,10 @@ def s278_f(
     d: dace.float32[LEN_1D],
     e: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if a[i] > 0.0:
-                c[i] = -c[i] + d[i] * e[i]
-            else:
-                b[i] = -b[i] + d[i] * e[i]
-            a[i] = b[i] + c[i] * d[i]
+    for i in range(LEN_1D):
+        if a[i] > 0.0:
+            c[i] = -c[i] + d[i] * e[i]
+        else:
+            b[i] = -b[i] + d[i] * e[i]
+        a[i] = b[i] + c[i] * d[i]
 

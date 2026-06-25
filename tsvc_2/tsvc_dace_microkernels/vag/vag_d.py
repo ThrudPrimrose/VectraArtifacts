@@ -7,7 +7,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def vag_d(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], ip: dace.int32[LEN_1D]):
-    for nl in range(2 * ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = b[ip[i]]
+    for i in range(LEN_1D):
+        a[i] = b[ip[i]]
 

@@ -15,14 +15,14 @@ void s272_d(double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       for (int i = 0; i < len_1d; i++) {
         if (e[i] >= threshold) {
           a[i] += c[i] * d[i];
           b[i] += c[i] * c[i];
         }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

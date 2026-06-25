@@ -16,14 +16,16 @@ void s319_d_single(double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     double sum;
-    sum = 0.0;
-    for (int i = 0; i < len_1d; ++i) {
-      a[i] = c[i] + d[i];
-      sum += a[i];
-      b[i] = c[i] + e[i];
-      sum += b[i];
-    }
-    b[0] = sum;
+    
+      sum = 0.0;
+      for (int i = 0; i < len_1d; ++i) {
+        a[i] = c[i] + d[i];
+        sum += a[i];
+        b[i] = c[i] + e[i];
+        sum += b[i];
+      }
+      b[0] = sum;
+    
   }
   auto t2 = clock_highres::now();
 

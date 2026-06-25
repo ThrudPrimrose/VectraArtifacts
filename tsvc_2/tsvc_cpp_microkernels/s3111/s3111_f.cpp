@@ -14,7 +14,7 @@ void s3111_f(const float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     float sum;
-    for (int nl = 0; nl < iterations / 2; ++nl) {
+    
       sum = 0.0f;
       for (int i = 0; i < len_1d; ++i) {
         if (a[i] > 0.0f) {
@@ -22,7 +22,7 @@ void s3111_f(const float *__restrict__ a, float *__restrict__ b,
         }
       }
       b[0] = sum;
-    }
+    
   }
   auto t2 = clock_highres::now();
 

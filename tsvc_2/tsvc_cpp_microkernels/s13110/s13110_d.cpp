@@ -5,6 +5,9 @@ using clock_highres = std::chrono::high_resolution_clock;
 
 extern "C" {
 
+static long idx_d(long i, long j, long n) { return i * n + j; }
+
+
 // ------------------------------------------------------------
 // s13110_d: same pattern as s3110 (variant)
 // ------------------------------------------------------------
@@ -13,18 +16,17 @@ void s13110_d(double *__restrict__ aa, double *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    auto idx = [len_2d](int i, int j) { return i * len_2d + j; };
 
     int xindex, yindex;
     double maxv = 0.0;
     double chksum = 0.0;
-    for (int nl = 0; nl < 100 * (iterations / (len_2d)); ++nl) {
-      maxv = aa[idx(0, 0)];
+    
+      maxv = aa[idx_d(0, 0, len_2d)];
       xindex = 0;
       yindex = 0;
       for (int i = 0; i < len_2d; ++i) {
         for (int j = 0; j < len_2d; ++j) {
-          double v = aa[idx(i, j)];
+          double v = aa[idx_d(i, j, len_2d)];
           if (v > maxv) {
             maxv = v;
             xindex = i;
@@ -34,7 +36,7 @@ void s13110_d(double *__restrict__ aa, double *__restrict__ bb,
       }
       chksum = maxv + static_cast<double>(xindex) + static_cast<double>(yindex);
       bb[0] = chksum;
-    }
+    
   }
   auto t2 = clock_highres::now();
 

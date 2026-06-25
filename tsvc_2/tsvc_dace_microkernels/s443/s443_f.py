@@ -12,10 +12,9 @@ def s443_f(
     c: dace.float32[LEN_1D],
     d: dace.float32[LEN_1D],
 ):
-    for nl in range(2 * ITERATIONS):
-        for i in range(LEN_1D):
-            if d[i] <= 0.0:
-                a[i] = a[i] + b[i] * c[i]
-            else:
-                a[i] = a[i] + b[i] * b[i]
+    for i in range(LEN_1D):
+        if d[i] <= 0.0:
+            a[i] = a[i] + b[i] * c[i]
+        else:
+            a[i] = a[i] + b[i] * b[i]
 

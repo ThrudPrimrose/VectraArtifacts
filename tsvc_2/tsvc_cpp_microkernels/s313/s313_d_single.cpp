@@ -14,10 +14,12 @@ void s313_d_single(const double *__restrict__ a, const double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    dot[0] = 0.0;
-    for (int i = 0; i < len_1d; ++i) {
-      dot[0] += a[i] * b[i];
-    }
+    
+      dot[0] = 0.0;
+      for (int i = 0; i < len_1d; ++i) {
+        dot[0] += a[i] * b[i];
+      }
+    
   }
   auto t2 = clock_highres::now();
 

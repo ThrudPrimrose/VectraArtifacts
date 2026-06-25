@@ -8,11 +8,10 @@ ITERATIONS = dace.symbol("ITERATIONS")
 @dace.program
 def s3113_d(a: dace.float64[LEN_1D], b: dace.float64[2]):
     maxv = dace.float64(0)
-    for nl in range(ITERATIONS * 4):
-        maxv = abs(a[0])
-        for i in range(LEN_1D):
-            av = abs(a[i])
-            if av > maxv:
-                maxv = av
+    maxv = abs(a[0])
+    for i in range(LEN_1D):
+        av = abs(a[i])
+        if av > maxv:
+            maxv = av
     b[0] = maxv
 

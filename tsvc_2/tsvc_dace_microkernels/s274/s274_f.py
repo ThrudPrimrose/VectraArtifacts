@@ -13,11 +13,10 @@ def s274_f(
     d: dace.float32[LEN_1D],
     e: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = c[i] + e[i] * d[i]
-            if a[i] > 0.0:
-                b[i] = a[i] + b[i]
-            else:
-                a[i] = d[i] * e[i]
+    for i in range(LEN_1D):
+        a[i] = c[i] + e[i] * d[i]
+        if a[i] > 0.0:
+            b[i] = a[i] + b[i]
+        else:
+            a[i] = d[i] * e[i]
 

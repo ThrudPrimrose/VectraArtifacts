@@ -14,10 +14,12 @@ void s251_f_single(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int i = 0; i < len_1d; i++) {
-      float s = b[i] + c[i] * d[i];
-      a[i] = s * s;
-    }
+    
+      for (int i = 0; i < len_1d; i++) {
+        float s = b[i] + c[i] * d[i];
+        a[i] = s * s;
+      }
+    
   }
 
   auto t2 = clock_highres::now();

@@ -9,7 +9,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s451_f(
     a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], c: dace.float32[LEN_1D]
 ):
-    for nl in range(ITERATIONS // 5):
-        for i in range(LEN_1D):
-            a[i] = sin(b[i]) + cos(c[i])
+    for i in range(LEN_1D):
+        a[i] = sin(b[i]) + cos(c[i])
 

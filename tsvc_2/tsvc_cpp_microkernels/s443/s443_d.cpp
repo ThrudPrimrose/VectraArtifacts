@@ -13,7 +13,7 @@ void s443_d(double *__restrict__ a, const double *__restrict__ b,
                     int iterations, int len_1d, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int nl = 0; nl < 2 * iterations; ++nl) {
+  
     for (int i = 0; i < len_1d; ++i) {
       if (d[i] <= 0.0) {
         a[i] += b[i] * c[i];
@@ -21,7 +21,7 @@ void s443_d(double *__restrict__ a, const double *__restrict__ b,
         a[i] += b[i] * b[i];
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

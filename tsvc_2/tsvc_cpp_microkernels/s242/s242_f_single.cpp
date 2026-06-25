@@ -14,9 +14,11 @@ void s242_f_single(float *__restrict__ a, const float *__restrict__ b,
                     const float s2, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int i = 1; i < len_1d; ++i) {
-      a[i] = a[i - 1] + s1 + s2 + b[i] + c[i] + d[i];
-    }
+    
+      for (int i = 1; i < len_1d; ++i) {
+        a[i] = a[i - 1] + s1 + s2 + b[i] + c[i] + d[i];
+      }
+    
   }
 
   auto t2 = clock_highres::now();

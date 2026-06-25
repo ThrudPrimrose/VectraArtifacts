@@ -9,10 +9,9 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s252_f(
     a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], c: dace.float32[LEN_1D]
 ):
-    for nl in range(ITERATIONS):
-        t = 0.0
-        for i in range(LEN_1D):
-            s = b[i] * c[i]
-            a[i] = s + t
-            t = s
+    t = 0.0
+    for i in range(LEN_1D):
+        s = b[i] * c[i]
+        a[i] = s + t
+        t = s
 

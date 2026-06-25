@@ -14,9 +14,11 @@ void s293_f_single(float *__restrict__ a, int iterations, int len_1d,
   auto t1 = clock_highres::now();
   {
     float a0 = a[0];
-    for (int i = 0; i < len_1d; i++) {
-      a[i] = a0;
-    }
+    
+      for (int i = 0; i < len_1d; i++) {
+        a[i] = a0;
+      }
+    
   }
   auto t2 = clock_highres::now();
 

@@ -9,7 +9,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s172_d(
     a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], n1: dace.int64, n3: dace.int64
 ):
-    for nl in range(ITERATIONS):
-        for i in range(n1 - 1, LEN_1D, n3):
-            a[i] = a[i] + b[i]
+    for i in range(n1 - 1, LEN_1D, n3):
+        a[i] = a[i] + b[i]
 

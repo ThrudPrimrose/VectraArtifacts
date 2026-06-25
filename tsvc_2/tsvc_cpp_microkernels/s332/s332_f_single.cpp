@@ -14,16 +14,18 @@ void s332_f_single(const float *__restrict__ a, float *__restrict__ result,
   {
     int index;
     float value;
-    index = -2;
-    value = -1.0f;
-    for (int i = 0; i < len_1d; ++i) {
-      if (a[i] > threshold) {
-        index = i;
-        value = a[i];
-        break;
+    
+      index = -2;
+      value = -1.0f;
+      for (int i = 0; i < len_1d; ++i) {
+        if (a[i] > threshold) {
+          index = i;
+          value = a[i];
+          break;
+        }
       }
-    }
-    result[0] = value + static_cast<float>(index);
+      result[0] = value + static_cast<float>(index);
+    
   }
   auto t2 = clock_highres::now();
 

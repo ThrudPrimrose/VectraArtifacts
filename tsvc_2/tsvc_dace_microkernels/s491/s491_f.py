@@ -13,7 +13,6 @@ def s491_f(
     d: dace.float32[LEN_1D],
     ip: dace.int32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            a[ip[i]] = b[i] + c[i] * d[i]
+    for i in range(LEN_1D):
+        a[ip[i]] = b[i] + c[i] * d[i]
 

@@ -13,15 +13,17 @@ void s123_f_single(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     int j;
-    j = -1;
-    for (int i = 0; i < (len_1d / 2); i++) {
-      j++;
-      a[j] = b[i] + d[i] * e[i];
-      if (c[i] > 0.0f) {
+    
+      j = -1;
+      for (int i = 0; i < (len_1d / 2); i++) {
         j++;
-        a[j] = c[i] + d[i] * e[i];
+        a[j] = b[i] + d[i] * e[i];
+        if (c[i] > 0.0f) {
+          j++;
+          a[j] = c[i] + d[i] * e[i];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

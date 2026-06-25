@@ -15,7 +15,7 @@ void s2275_f(float *__restrict__ a, float *__restrict__ aa,
                      std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int nl = 0; nl < 100 * (iterations / len_2d); ++nl) {
+  
     for (int i = 0; i < len_2d; ++i) {
       for (int j = 0; j < len_2d; ++j) {
         int idx = j * len_2d + i;
@@ -23,7 +23,7 @@ void s2275_f(float *__restrict__ a, float *__restrict__ aa,
       }
       a[i] = b[i] + c[i] * d[i];
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

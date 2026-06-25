@@ -15,7 +15,7 @@ void s258_d(double *__restrict__ a, const double *__restrict__ aa,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       double s = 0.0;
       for (int i = 0; i < len_2d; i++) {
         if (a[i] > 0.0)
@@ -24,7 +24,7 @@ void s258_d(double *__restrict__ a, const double *__restrict__ aa,
         b[i] = s * c[i] + d[i];
         e[i] = (s + 1.0) * aa[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

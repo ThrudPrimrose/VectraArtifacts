@@ -12,9 +12,11 @@ void s111_d_single(double *__restrict__ a, const double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 1; i < len_1d; i += 2) {
-      a[i] = a[i - 1] + b[i];
-    }
+    
+      for (int i = 1; i < len_1d; i += 2) {
+        a[i] = a[i - 1] + b[i];
+      }
+    
   }
   auto t2 = clock_highres::now();
 

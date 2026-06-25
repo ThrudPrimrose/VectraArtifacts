@@ -16,14 +16,14 @@ void s122_d(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     int j, k;
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       j = 1;
       k = 0;
       for (int i = n1 - 1; i < len_1d; i += n3) {
         k += j;
         a[i] += b[len_1d - k];
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

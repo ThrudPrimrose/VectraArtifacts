@@ -13,7 +13,7 @@ void s292_f(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       int im1 = len_1d - 1;
       int im2 = len_1d - 2;
       for (int i = 0; i < len_1d; i++) {
@@ -21,7 +21,7 @@ void s292_f(float *__restrict__ a, const float *__restrict__ b,
         im2 = im1;
         im1 = i;
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

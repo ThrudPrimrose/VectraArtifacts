@@ -13,11 +13,11 @@ void s431_f(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   // k1=1; k2=2; k=2*k1-k2 => k = 0, so a[i] = a[i] + b[i]
-  for (int nl = 0; nl < iterations * 10; ++nl) {
+  
     for (int i = 0; i < len_1d; ++i) {
       a[i] = a[i] + b[i];
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

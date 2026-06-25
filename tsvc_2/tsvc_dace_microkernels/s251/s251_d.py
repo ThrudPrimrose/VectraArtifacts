@@ -12,8 +12,7 @@ def s251_d(
     c: dace.float64[LEN_1D],
     d: dace.float64[LEN_1D],
 ):
-    for nl in range(4 * ITERATIONS):
-        for i in range(LEN_1D):
-            s = b[i] + c[i] * d[i]
-            a[i] = s * s
+    for i in range(LEN_1D):
+        s = b[i] + c[i] * d[i]
+        a[i] = s * s
 

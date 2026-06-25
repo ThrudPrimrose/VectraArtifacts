@@ -7,13 +7,12 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s332_f(a: dace.float32[LEN_1D], result: dace.float32[1], threshold: dace.int64):
-    for nl in range(ITERATIONS):
-        index = -2
-        value = -1.0
-        for i in range(LEN_1D):
-            if a[i] > threshold:
-                index = i
-                value = a[i]
-                break
-        result[0] = value + float(index)
+    index = -2
+    value = -1.0
+    for i in range(LEN_1D):
+        if a[i] > threshold:
+            index = i
+            value = a[i]
+            break
+    result[0] = value + float(index)
 

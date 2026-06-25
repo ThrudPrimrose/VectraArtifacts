@@ -12,9 +12,8 @@ def s244_f(
     c: dace.float32[LEN_1D],
     d: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D - 1):
-            a[i] = b[i] + c[i] * d[i]
-            b[i] = c[i] + b[i]
-            a[i + 1] = b[i] + a[i + 1] * d[i]
+    for i in range(LEN_1D - 1):
+        a[i] = b[i] + c[i] * d[i]
+        b[i] = c[i] + b[i]
+        a[i + 1] = b[i] + a[i + 1] * d[i]
 

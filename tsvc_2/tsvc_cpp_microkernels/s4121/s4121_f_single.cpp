@@ -16,9 +16,11 @@ void s4121_f_single(float *__restrict__ a, const float *__restrict__ b,
                      std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_1d; ++i) {
-    a[i] += tsvc_mul_f_single(b[i], c[i]);
-  }
+  
+    for (int i = 0; i < len_1d; ++i) {
+      a[i] += tsvc_mul_f_single(b[i], c[i]);
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

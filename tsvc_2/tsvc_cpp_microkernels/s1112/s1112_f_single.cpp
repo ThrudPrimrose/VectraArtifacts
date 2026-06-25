@@ -12,9 +12,11 @@ void s1112_f_single(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = len_1d - 1; i >= 0; --i) {
-      a[i] = b[i] + 1.0f;
-    }
+    
+      for (int i = len_1d - 1; i >= 0; --i) {
+        a[i] = b[i] + 1.0f;
+      }
+    
   }
   auto t2 = clock_highres::now();
 

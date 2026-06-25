@@ -15,13 +15,13 @@ void s222_d(double *__restrict__ a, double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations / 2; ++nl) {
+    
       for (int i = 1; i < len_1d; ++i) {
         a[i] += b[i] * c[i];
         e[i] = e[i - 1] * e[i - 1];
         a[i] -= b[i] * c[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

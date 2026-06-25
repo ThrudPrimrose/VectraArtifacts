@@ -12,8 +12,7 @@ def s2244_d(
     c: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        a[LEN_1D - 1] = b[LEN_1D - 2] + e[LEN_1D - 2]
-        for i in range(LEN_1D - 1):
-            a[i] = b[i] + c[i]
+    a[LEN_1D - 1] = b[LEN_1D - 2] + e[LEN_1D - 2]
+    for i in range(LEN_1D - 1):
+        a[i] = b[i] + c[i]
 

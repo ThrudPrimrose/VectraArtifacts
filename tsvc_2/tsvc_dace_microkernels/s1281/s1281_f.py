@@ -13,9 +13,8 @@ def s1281_f(
     d: dace.float32[LEN_1D],
     e: dace.float32[LEN_1D],
 ):
-    for nl in range(4 * ITERATIONS):
-        for i in range(LEN_1D):
-            x = (b[i] * c[i]) + (a[i] * d[i]) + e[i]
-            a[i] = x - 1.0
-            b[i] = x
+    for i in range(LEN_1D):
+        x = (b[i] * c[i]) + (a[i] * d[i]) + e[i]
+        a[i] = x - 1.0
+        b[i] = x
 

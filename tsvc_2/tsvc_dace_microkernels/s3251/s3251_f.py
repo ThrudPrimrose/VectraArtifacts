@@ -13,9 +13,8 @@ def s3251_f(
     d: dace.float32[LEN_1D],
     e: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D - 1):
-            a[i + 1] = b[i] + c[i]
-            b[i] = c[i] * e[i]
-            d[i] = a[i] * e[i]
+    for i in range(LEN_1D - 1):
+        a[i + 1] = b[i] + c[i]
+        b[i] = c[i] * e[i]
+        d[i] = a[i] * e[i]
 

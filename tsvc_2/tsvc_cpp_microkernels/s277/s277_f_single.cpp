@@ -12,14 +12,16 @@ void s277_f_single(float *__restrict__ a, float *__restrict__ b,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_1d - 1; ++i) {
-    if (a[i] < 0.0f) {
-      if (b[i] < 0.0f) {
-        a[i] += c[i] * d[i];
+  
+    for (int i = 0; i < len_1d - 1; ++i) {
+      if (a[i] < 0.0f) {
+        if (b[i] < 0.0f) {
+          a[i] += c[i] * d[i];
+        }
+        b[i + 1] = c[i] + d[i] * e[i];
       }
-      b[i + 1] = c[i] + d[i] * e[i];
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

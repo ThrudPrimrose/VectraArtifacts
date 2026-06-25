@@ -12,7 +12,6 @@ def s4113_f(
     c: dace.float32[LEN_1D],
     ip: dace.int32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            a[ip[i]] = b[ip[i]] + c[i]
+    for i in range(LEN_1D):
+        a[ip[i]] = b[ip[i]] + c[i]
 

@@ -11,15 +11,17 @@ void s1351_f_single(float *__restrict__ a, const float *__restrict__ b,
                      std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  const float *__restrict__ B = b;
-  const float *__restrict__ C = c;
-  float *__restrict__ A = a;
-  for (int i = 0; i < len_1d; ++i) {
-    *A = *B + *C;
-    ++A;
-    ++B;
-    ++C;
-  }
+  
+    const float *__restrict__ B = b;
+    const float *__restrict__ C = c;
+    float *__restrict__ A = a;
+    for (int i = 0; i < len_1d; ++i) {
+      *A = *B + *C;
+      ++A;
+      ++B;
+      ++C;
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

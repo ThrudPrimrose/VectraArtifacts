@@ -15,12 +15,12 @@ void s312_f(float *__restrict__ a, float *__restrict__ result,
   auto t1 = clock_highres::now();
   {
     float prod;
-    for (int nl = 0; nl < 10 * iterations; ++nl) {
+    
       prod = 1.0f;
       for (int i = 0; i < len_1d; ++i) {
         prod *= a[i];
       }
-    }
+    
     result[0] = prod;
   }
   auto t2 = clock_highres::now();

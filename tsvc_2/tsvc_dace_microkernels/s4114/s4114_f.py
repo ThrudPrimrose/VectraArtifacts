@@ -14,8 +14,7 @@ def s4114_f(
     ip: dace.int32[LEN_1D],
     n1: dace.int32,
 ):
-    for nl in range(ITERATIONS):
-        for i in range(n1 - 1, LEN_1D):
-            k = ip[i]
-            a[i] = b[i] + c[LEN_1D - k - 1] * d_[i]
+    for i in range(n1 - 1, LEN_1D):
+        k = ip[i]
+        a[i] = b[i] + c[LEN_1D - k - 1] * d_[i]
 

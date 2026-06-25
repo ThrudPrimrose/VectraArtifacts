@@ -9,8 +9,7 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s313_d(
     a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], dot: dace.float64[1]
 ):
-    for nl in range(10 * ITERATIONS):
-        dot[0] = 0.0
-        for i in range(LEN_1D):
-            dot[0] = dot[0] + a[i] * b[i]
+    dot[0] = 0.0
+    for i in range(LEN_1D):
+        dot[0] = dot[0] + a[i] * b[i]
 

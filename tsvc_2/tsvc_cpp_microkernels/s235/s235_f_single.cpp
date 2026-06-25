@@ -11,13 +11,15 @@ void s235_f_single(float *__restrict__ a, float *__restrict__ aa,
                     const int len_2d, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_2d; ++i) {
-      a[i] += b[i] * c[i];
-      for (int j = 1; j < len_2d; ++j) {
-        aa[j * len_2d + i] =
-            aa[(j - 1) * len_2d + i] + bb[j * len_2d + i] * a[i];
+    
+      for (int i = 0; i < len_2d; ++i) {
+        a[i] += b[i] * c[i];
+        for (int j = 1; j < len_2d; ++j) {
+          aa[j * len_2d + i] =
+              aa[(j - 1) * len_2d + i] + bb[j * len_2d + i] * a[i];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

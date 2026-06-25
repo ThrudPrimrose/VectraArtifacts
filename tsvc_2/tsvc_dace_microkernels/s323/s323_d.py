@@ -13,8 +13,7 @@ def s323_d(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS // 2):
-        for i in range(1, LEN_1D):
-            a[i] = b[i - 1] + c[i] * d[i]
-            b[i] = a[i] + c[i] * e[i]
+    for i in range(1, LEN_1D):
+        a[i] = b[i - 1] + c[i] * d[i]
+        b[i] = a[i] + c[i] * e[i]
 

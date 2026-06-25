@@ -14,16 +14,18 @@ void s233_f_single(float *__restrict__ aa, float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 8; i < len_2d; ++i) {
+    
+      for (int i = 8; i < len_2d; ++i) {
 
-      for (int j = 8; j < len_2d; ++j) {
-        aa[j * len_2d + i] = aa[(j - 1) * len_2d + i] + cc[j * len_2d + i];
-      }
+        for (int j = 8; j < len_2d; ++j) {
+          aa[j * len_2d + i] = aa[(j - 1) * len_2d + i] + cc[j * len_2d + i];
+        }
 
-      for (int j = 8; j < len_2d; ++j) {
-        bb[j * len_2d + i] = bb[j * len_2d + (i - 1)] + cc[j * len_2d + i];
+        for (int j = 8; j < len_2d; ++j) {
+          bb[j * len_2d + i] = bb[j * len_2d + (i - 1)] + cc[j * len_2d + i];
+        }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

@@ -14,7 +14,7 @@ void s275_f(float *__restrict__ aa, const float *__restrict__ bb,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < 10 * (iterations / len_2d); nl++) {
+    
       for (int i = 0; i < len_2d; i++) {
         if (aa[i] > 0.0f) {
           for (int j = 1; j < len_2d; j++) {
@@ -23,7 +23,7 @@ void s275_f(float *__restrict__ aa, const float *__restrict__ bb,
           }
         }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

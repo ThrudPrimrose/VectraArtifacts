@@ -11,7 +11,7 @@ void s3113_f(const float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   float maxv = 0.0f;
-  for (int nl = 0; nl < iterations * 4; ++nl) {
+  
     maxv = std::fabs(a[0]);
     for (int i = 0; i < len_1d; ++i) {
       float av = std::fabs(a[i]);
@@ -19,7 +19,7 @@ void s3113_f(const float *__restrict__ a, float *__restrict__ b,
         maxv = av;
       }
     }
-  }
+  
   b[0] = maxv;
 
   auto t2 = clock_highres::now();

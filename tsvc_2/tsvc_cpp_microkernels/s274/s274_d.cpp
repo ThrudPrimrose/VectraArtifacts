@@ -15,7 +15,7 @@ void s274_d(double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       for (int i = 0; i < len_1d; i++) {
         a[i] = c[i] + e[i] * d[i];
         if (a[i] > 0.0)
@@ -23,7 +23,7 @@ void s274_d(double *__restrict__ a, double *__restrict__ b,
         else
           a[i] = d[i] * e[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

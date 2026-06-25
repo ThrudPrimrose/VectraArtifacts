@@ -13,9 +13,11 @@ void s451_d_single(double *__restrict__ a, const double *__restrict__ b,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_1d; ++i) {
-    a[i] = std::sin(b[i]) + std::cos(c[i]);
-  }
+  
+    for (int i = 0; i < len_1d; ++i) {
+      a[i] = std::sin(b[i]) + std::cos(c[i]);
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

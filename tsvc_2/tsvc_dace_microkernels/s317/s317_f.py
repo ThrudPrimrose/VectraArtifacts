@@ -7,8 +7,7 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s317_f(q: dace.float32[LEN_1D]):
-    for nl in range(5 * ITERATIONS):
-        q[0] = 1.0
-        for i in range(LEN_1D // 2):
-            q[0] = q[0] * 0.99
+    q[0] = 1.0
+    for i in range(LEN_1D // 2):
+        q[0] = q[0] * 0.99
 

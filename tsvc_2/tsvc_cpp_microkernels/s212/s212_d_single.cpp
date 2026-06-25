@@ -14,10 +14,12 @@ void s212_d_single(double *__restrict__ a, double *__restrict__ b,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_1d - 1; ++i) {
-      a[i] *= c[i];
-      b[i] += a[i + 1] * d[i];
-    }
+    
+      for (int i = 0; i < len_1d - 1; ++i) {
+        a[i] *= c[i];
+        b[i] += a[i + 1] * d[i];
+      }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

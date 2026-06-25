@@ -14,7 +14,7 @@ void s2233_f(float *__restrict__ aa, float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 100 * (iterations / len_2d); ++nl) {
+    
       for (int i = 8; i < len_2d; ++i) {
 
         for (int j = 8; j < len_2d; ++j) {
@@ -25,7 +25,7 @@ void s2233_f(float *__restrict__ aa, float *__restrict__ bb,
           bb[i * len_2d + j] = bb[(i - 1) * len_2d + j] + cc[i * len_2d + j];
         }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

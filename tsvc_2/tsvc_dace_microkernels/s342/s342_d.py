@@ -7,10 +7,9 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s342_d(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
-    for nl in range(ITERATIONS):
-        j = -1
-        for i in range(LEN_1D):
-            if a[i] > 0.0:
-                j = j + 1
-                a[i] = b[j]
+    j = -1
+    for i in range(LEN_1D):
+        if a[i] > 0.0:
+            j = j + 1
+            a[i] = b[j]
 

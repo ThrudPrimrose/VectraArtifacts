@@ -13,12 +13,12 @@ void s311_f(float *__restrict__ a, float *__restrict__ sum_out,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations * 10; nl++) {
+    
       sum_out[0] = 0.0f;
       for (int i = 0; i < len_1d; i++) {
         sum_out[0] += a[i];
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

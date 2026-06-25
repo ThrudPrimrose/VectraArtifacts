@@ -14,12 +14,14 @@ void s118_f_single(float *__restrict__ a, const float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 1; i < len_2d; ++i) {
-      for (int j = 0; j <= i - 1; ++j) {
-        const int idx_bb = j * len_2d + i; // bb[j][i]
-        a[i] += bb[idx_bb] * a[i - j - 1];
+    
+      for (int i = 1; i < len_2d; ++i) {
+        for (int j = 0; j <= i - 1; ++j) {
+          const int idx_bb = j * len_2d + i; // bb[j][i]
+          a[i] += bb[idx_bb] * a[i - j - 1];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

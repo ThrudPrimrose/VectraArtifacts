@@ -12,9 +12,8 @@ def s1111_d(
     c: dace.float64[LEN_1D],
     d: dace.float64[LEN_1D],
 ):
-    for nl in range(2 * ITERATIONS):
-        for i in dace.map[0 : LEN_1D // 2]:
-            a[2 * i] = (
-                c[i] * b[i] + d[i] * b[i] + c[i] * c[i] + d[i] * b[i] + d[i] * c[i]
-            )
+    for i in dace.map[0 : LEN_1D // 2]:
+        a[2 * i] = (
+            c[i] * b[i] + d[i] * b[i] + c[i] * c[i] + d[i] * b[i] + d[i] * c[i]
+        )
 

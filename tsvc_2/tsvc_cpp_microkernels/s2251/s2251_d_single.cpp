@@ -15,12 +15,14 @@ void s2251_d_single(double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    double s = 0.0;
-    for (int i = 0; i < len_1d; i++) {
-      a[i] = s * e[i];
-      s = b[i] + c[i];
-      b[i] = a[i] + d[i];
-    }
+    
+      double s = 0.0;
+      for (int i = 0; i < len_1d; i++) {
+        a[i] = s * e[i];
+        s = b[i] + c[i];
+        b[i] = a[i] + d[i];
+      }
+    
   }
 
   auto t2 = clock_highres::now();

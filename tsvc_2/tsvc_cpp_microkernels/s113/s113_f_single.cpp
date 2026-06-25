@@ -11,9 +11,11 @@ void s113_f_single(float *__restrict__ a, const float *__restrict__ b,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int i = 1; i < len_1d; i++) {
-      a[i] = a[0] + b[i];
-    }
+    
+      for (int i = 1; i < len_1d; i++) {
+        a[i] = a[0] + b[i];
+      }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

@@ -14,7 +14,7 @@ void s332_f(const float *__restrict__ a, float *__restrict__ result,
   {
     int index;
     float value;
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       index = -2;
       value = -1.0f;
       for (int i = 0; i < len_1d; ++i) {
@@ -25,7 +25,7 @@ void s332_f(const float *__restrict__ a, float *__restrict__ result,
         }
       }
       result[0] = value + static_cast<float>(index);
-    }
+    
   }
   auto t2 = clock_highres::now();
 

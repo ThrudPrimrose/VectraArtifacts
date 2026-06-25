@@ -12,8 +12,7 @@ def s1232_f(
     bb: dace.float32[LEN_2D, LEN_2D],
     cc: dace.float32[LEN_2D, LEN_2D],
 ):
-    for nl in range(100 * (ITERATIONS // LEN_2D)):
-        for j in range(LEN_2D):
-            for i in range(j * VLEN, LEN_2D):
-                aa[i, j] = bb[i, j] + cc[i, j]
+    for j in range(LEN_2D):
+        for i in range(j * VLEN, LEN_2D):
+            aa[i, j] = bb[i, j] + cc[i, j]
 

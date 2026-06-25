@@ -7,9 +7,8 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s312_d(a: dace.float64[LEN_1D], result: dace.float64[1]):
-    for nl in range(10 * ITERATIONS):
-        prod = 1.0
-        for i in range(LEN_1D):
-            prod = prod * a[i]
+    prod = 1.0
+    for i in range(LEN_1D):
+        prod = prod * a[i]
     result[0] = prod
 

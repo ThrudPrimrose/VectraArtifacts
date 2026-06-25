@@ -12,10 +12,9 @@ def s125_f(
     bb: dace.float32[LEN_2D, LEN_2D],
     cc: dace.float32[LEN_2D, LEN_2D],
 ):
-    for nl in range(100 * (ITERATIONS // LEN_2D)):
-        k = -1
-        for i in range(LEN_2D):
-            for j in range(LEN_2D):
-                k = k + 1
-                flat_2d_array[k] = aa[i, j] + bb[i, j] * cc[i, j]
+    k = -1
+    for i in range(LEN_2D):
+        for j in range(LEN_2D):
+            k = k + 1
+            flat_2d_array[k] = aa[i, j] + bb[i, j] * cc[i, j]
 

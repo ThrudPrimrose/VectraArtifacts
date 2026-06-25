@@ -22,11 +22,13 @@ void s31111_f_single(float *__restrict__ a, float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    float sum = 0.0f;
-    for (int base = 0; base < len_1d - 3; base += 4)
-      sum += s31111_test_f_single(&a[base]);
+    
+      float sum = 0.0f;
+      for (int base = 0; base < len_1d - 3; base += 4)
+        sum += s31111_test_f_single(&a[base]);
 
-    b[0] = sum;
+      b[0] = sum;
+    
   }
 
   auto t2 = clock_highres::now();

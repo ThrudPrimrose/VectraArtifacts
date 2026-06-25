@@ -13,13 +13,15 @@ void s443_d_single(double *__restrict__ a, const double *__restrict__ b,
                     int iterations, int len_1d, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_1d; ++i) {
-    if (d[i] <= 0.0) {
-      a[i] += b[i] * c[i];
-    } else {
-      a[i] += b[i] * b[i];
+  
+    for (int i = 0; i < len_1d; ++i) {
+      if (d[i] <= 0.0) {
+        a[i] += b[i] * c[i];
+      } else {
+        a[i] += b[i] * b[i];
+      }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

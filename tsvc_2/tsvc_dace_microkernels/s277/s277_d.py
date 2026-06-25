@@ -13,10 +13,9 @@ def s277_d(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D - 1):
-            if a[i] < 0.0:
-                if b[i] < 0.0:
-                    a[i] = a[i] + c[i] * d[i]
-                b[i + 1] = c[i] + d[i] * e[i]
+    for i in range(LEN_1D - 1):
+        if a[i] < 0.0:
+            if b[i] < 0.0:
+                a[i] = a[i] + c[i] * d[i]
+            b[i + 1] = c[i] + d[i] * e[i]
 

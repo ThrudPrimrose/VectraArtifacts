@@ -15,13 +15,15 @@ void s119_f_single(float *__restrict__ aa, const float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 1; i < len_2d; ++i) {
-      for (int j = 1; j < len_2d; ++j) {
-        const int idx_ij = i * len_2d + j;               // [i][j]
-        const int idx_im1j = (i - 1) * len_2d + (j - 1); // [i-1][j-1]
-        aa[idx_ij] = aa[idx_im1j] + bb[idx_ij];
+    
+      for (int i = 1; i < len_2d; ++i) {
+        for (int j = 1; j < len_2d; ++j) {
+          const int idx_ij = i * len_2d + j;               // [i][j]
+          const int idx_im1j = (i - 1) * len_2d + (j - 1); // [i-1][j-1]
+          aa[idx_ij] = aa[idx_im1j] + bb[idx_ij];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

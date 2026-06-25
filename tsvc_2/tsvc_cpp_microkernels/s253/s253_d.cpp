@@ -15,7 +15,7 @@ void s253_d(double *__restrict__ a, double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       double s = 0.0;
       for (int i = 0; i < len_1d; ++i) {
         if (a[i] > b[i]) {
@@ -24,7 +24,7 @@ void s253_d(double *__restrict__ a, double *__restrict__ b,
           a[i] = s;
         }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

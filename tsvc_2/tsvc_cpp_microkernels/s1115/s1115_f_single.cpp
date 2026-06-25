@@ -11,12 +11,14 @@ void s1115_f_single(float *__restrict__ aa, const float *__restrict__ bb,
                      const int len_2d, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_2d; i++) {
-      for (int j = 0; j < len_2d; j++) {
-        aa[i * len_2d + j] =
-            aa[i * len_2d + j] * cc[j * len_2d + i] + bb[i * len_2d + j];
+    
+      for (int i = 0; i < len_2d; i++) {
+        for (int j = 0; j < len_2d; j++) {
+          aa[i * len_2d + j] =
+              aa[i * len_2d + j] * cc[j * len_2d + i] + bb[i * len_2d + j];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

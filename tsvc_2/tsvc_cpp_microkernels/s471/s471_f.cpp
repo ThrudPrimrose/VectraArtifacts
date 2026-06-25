@@ -17,13 +17,13 @@ void s471_f(float *__restrict__ b, const float *__restrict__ c,
   auto t1 = clock_highres::now();
 
   int m = len_1d;
-  for (int nl = 0; nl < iterations / 2; ++nl) {
+  
     for (int i = 0; i < m; ++i) {
       x[i] = b[i] + d[i] * d[i];
       s471s_f();
       b[i] = c[i] + d[i] * e[i];
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

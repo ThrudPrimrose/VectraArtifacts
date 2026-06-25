@@ -9,9 +9,8 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s482_f(
     a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], c: dace.float32[LEN_1D]
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = a[i] + b[i] * c[i]
-            if c[i] > b[i]:
-                break
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[i] * c[i]
+        if c[i] > b[i]:
+            break
 

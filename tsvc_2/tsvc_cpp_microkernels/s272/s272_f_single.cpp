@@ -15,12 +15,14 @@ void s272_f_single(float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int i = 0; i < len_1d; i++) {
-      if (e[i] >= threshold) {
-        a[i] += c[i] * d[i];
-        b[i] += c[i] * c[i];
+    
+      for (int i = 0; i < len_1d; i++) {
+        if (e[i] >= threshold) {
+          a[i] += c[i] * d[i];
+          b[i] += c[i] * c[i];
+        }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

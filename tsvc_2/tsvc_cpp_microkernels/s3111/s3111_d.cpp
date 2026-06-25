@@ -14,7 +14,7 @@ void s3111_d(const double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     double sum;
-    for (int nl = 0; nl < iterations / 2; ++nl) {
+    
       sum = 0.0;
       for (int i = 0; i < len_1d; ++i) {
         if (a[i] > 0.0) {
@@ -22,7 +22,7 @@ void s3111_d(const double *__restrict__ a, double *__restrict__ b,
         }
       }
       b[0] = sum;
-    }
+    
   }
   auto t2 = clock_highres::now();
 

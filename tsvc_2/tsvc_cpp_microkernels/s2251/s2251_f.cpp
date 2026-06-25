@@ -15,14 +15,14 @@ void s2251_f(float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       float s = 0.0f;
       for (int i = 0; i < len_1d; i++) {
         a[i] = s * e[i];
         s = b[i] + c[i];
         b[i] = a[i] + d[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

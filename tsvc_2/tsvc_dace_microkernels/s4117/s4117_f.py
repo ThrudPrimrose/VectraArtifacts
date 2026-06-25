@@ -12,8 +12,7 @@ def s4117_f(
     c: dace.float32[LEN_1D],
     d: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            j = i // 2
-            a[i] = b[i] + c[j] * d[i]
+    for i in range(LEN_1D):
+        j = i // 2
+        a[i] = b[i] + c[j] * d[i]
 

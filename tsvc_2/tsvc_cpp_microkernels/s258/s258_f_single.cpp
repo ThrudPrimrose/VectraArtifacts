@@ -15,14 +15,16 @@ void s258_f_single(float *__restrict__ a, const float *__restrict__ aa,
   auto t1 = clock_highres::now();
 
   {
-    float s = 0.0f;
-    for (int i = 0; i < len_2d; i++) {
-      if (a[i] > 0.0f)
-        s = d[i] * d[i];
+    
+      float s = 0.0f;
+      for (int i = 0; i < len_2d; i++) {
+        if (a[i] > 0.0f)
+          s = d[i] * d[i];
 
-      b[i] = s * c[i] + d[i];
-      e[i] = (s + 1.0f) * aa[i];
-    }
+        b[i] = s * c[i] + d[i];
+        e[i] = (s + 1.0f) * aa[i];
+      }
+    
   }
 
   auto t2 = clock_highres::now();

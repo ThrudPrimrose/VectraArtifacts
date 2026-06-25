@@ -13,7 +13,7 @@ void s128_f(float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     int j, k;
-    for (int nl = 0; nl < 2 * iterations; nl++) {
+    
       j = -1;
       for (int i = 0; i < len_1d / 2; i++) {
         k = j + 1;
@@ -21,7 +21,7 @@ void s128_f(float *__restrict__ a, float *__restrict__ b,
         j = k + 1;
         b[k] = a[i] + c[k];
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

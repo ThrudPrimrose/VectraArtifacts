@@ -7,9 +7,8 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s3112_f(a: dace.float32[LEN_1D], b: dace.float32[LEN_1D]):
-    for nl in range(ITERATIONS):
-        sum = 0.0
-        for i in range(LEN_1D):
-            sum = sum + a[i]
-            b[i] = sum
+    sum = 0.0
+    for i in range(LEN_1D):
+        sum = sum + a[i]
+        b[i] = sum
 

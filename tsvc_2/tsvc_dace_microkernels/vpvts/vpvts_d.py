@@ -8,7 +8,6 @@ S = dace.symbol("S")
 
 @dace.program
 def vpvts_d(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = a[i] + b[i] * S
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[i] * S
 

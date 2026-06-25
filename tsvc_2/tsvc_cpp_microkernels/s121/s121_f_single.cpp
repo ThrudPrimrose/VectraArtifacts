@@ -15,10 +15,12 @@ void s121_f_single(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     int j;
-    for (int i = 0; i < len_1d - 1; ++i) {
-      j = i + 1;
-      a[i] = a[j] + b[i];
-    }
+    
+      for (int i = 0; i < len_1d - 1; ++i) {
+        j = i + 1;
+        a[i] = a[j] + b[i];
+      }
+    
   }
   auto t2 = clock_highres::now();
 

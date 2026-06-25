@@ -14,11 +14,11 @@ void s1221_f(float *__restrict__ a, float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       for (int i = 4; i < len_1d; ++i) {
         b[i] = b[i - 4] + a[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

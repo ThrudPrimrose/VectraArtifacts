@@ -15,7 +15,7 @@ void s141_f(const float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 200 * (iterations / len_2d); ++nl) {
+    
       for (int i = 0; i < len_2d; ++i) {
         int k = (i + 1) * (i) / 2 + (i);
         for (int j = i; j < len_2d; ++j) {
@@ -23,7 +23,7 @@ void s141_f(const float *__restrict__ bb,
           k += (j + 1);
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

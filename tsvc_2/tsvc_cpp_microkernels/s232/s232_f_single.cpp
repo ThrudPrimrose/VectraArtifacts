@@ -13,13 +13,15 @@ void s232_f_single(float *__restrict__ aa, const float *__restrict__ bb,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int j = 1; j < len_2d; ++j) {
-      for (int i = 1; i <= j; ++i) {
-        aa[j * len_2d + i] =
-            aa[j * len_2d + (i - 1)] * aa[j * len_2d + (i - 1)] +
-            bb[j * len_2d + i];
+    
+      for (int j = 1; j < len_2d; ++j) {
+        for (int i = 1; i <= j; ++i) {
+          aa[j * len_2d + i] =
+              aa[j * len_2d + (i - 1)] * aa[j * len_2d + (i - 1)] +
+              bb[j * len_2d + i];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

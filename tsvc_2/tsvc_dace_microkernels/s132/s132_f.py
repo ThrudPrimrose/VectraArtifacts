@@ -9,7 +9,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s132_f(
     aa: dace.float32[LEN_2D, LEN_2D], b: dace.float32[LEN_2D], c: dace.float32[LEN_2D]
 ):
-    for nl in range(400 * ITERATIONS):
-        for i in range(1, LEN_2D):
-            aa[0, i] = aa[1, i - 1] + b[i] * c[1]
+    for i in range(1, LEN_2D):
+        aa[0, i] = aa[1, i - 1] + b[i] * c[1]
 

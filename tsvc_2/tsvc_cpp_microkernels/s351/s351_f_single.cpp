@@ -16,12 +16,14 @@ void s351_f_single(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   float alpha = c[0];
-  for (int i = 0; i < len_1d - 3; i += 4) {
-    a[i] += alpha * b[i];
-    a[i + 1] += alpha * b[i + 1];
-    a[i + 2] += alpha * b[i + 2];
-    a[i + 3] += alpha * b[i + 3];
-  }
+  
+    for (int i = 0; i < len_1d - 3; i += 4) {
+      a[i] += alpha * b[i];
+      a[i + 1] += alpha * b[i + 1];
+      a[i + 2] += alpha * b[i + 2];
+      a[i + 3] += alpha * b[i + 3];
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

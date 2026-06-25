@@ -11,11 +11,13 @@ void s2712_f_single(float *__restrict__ a, const float *__restrict__ b,
                      std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_1d; ++i) {
-    if (a[i] > b[i]) {
-      a[i] += b[i] * c[i];
+  
+    for (int i = 0; i < len_1d; ++i) {
+      if (a[i] > b[i]) {
+        a[i] += b[i] * c[i];
+      }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

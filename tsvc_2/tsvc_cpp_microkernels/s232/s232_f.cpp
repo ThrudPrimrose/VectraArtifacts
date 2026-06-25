@@ -13,7 +13,7 @@ void s232_f(float *__restrict__ aa, const float *__restrict__ bb,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 100 * (iterations / (len_2d)); ++nl) {
+    
       for (int j = 1; j < len_2d; ++j) {
         for (int i = 1; i <= j; ++i) {
           aa[j * len_2d + i] =
@@ -21,7 +21,7 @@ void s232_f(float *__restrict__ aa, const float *__restrict__ bb,
               bb[j * len_2d + i];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

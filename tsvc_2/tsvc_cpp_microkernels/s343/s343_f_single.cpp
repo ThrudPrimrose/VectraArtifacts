@@ -12,16 +12,18 @@ void s343_f_single(const float *__restrict__ aa,
                     int len_2d, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  int k = -1;
-  for (int i = 0; i < len_2d; ++i) {
-    for (int j = 0; j < len_2d; ++j) {
-      int idx = j * len_2d + i;
-      if (bb[idx] > 0.0f) {
-        ++k;
-        flat_2d_array[k] = aa[idx];
+  
+    int k = -1;
+    for (int i = 0; i < len_2d; ++i) {
+      for (int j = 0; j < len_2d; ++j) {
+        int idx = j * len_2d + i;
+        if (bb[idx] > 0.0f) {
+          ++k;
+          flat_2d_array[k] = aa[idx];
+        }
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

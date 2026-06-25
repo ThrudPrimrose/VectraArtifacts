@@ -12,11 +12,10 @@ def s128_d(
     c: dace.float64[LEN_1D],
     d: dace.float64[LEN_1D],
 ):
-    for nl in range(2 * ITERATIONS):
-        j = -1
-        for i in range(LEN_1D // 2):
-            k = j + 1
-            a[i] = b[k] - d[i]
-            j = k + 1
-            b[k] = a[i] + c[k]
+    j = -1
+    for i in range(LEN_1D // 2):
+        k = j + 1
+        a[i] = b[k] - d[i]
+        j = k + 1
+        b[k] = a[i] + c[k]
 

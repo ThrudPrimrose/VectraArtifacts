@@ -15,9 +15,8 @@ def s2275_d(
     bb: dace.float64[LEN_2D, LEN_2D],
     cc: dace.float64[LEN_2D, LEN_2D],
 ):
-    for nl in range(100 * (ITERATIONS // LEN_2D)):
-        for i in range(LEN_2D):
-            for j in range(LEN_2D):
-                aa[j, i] = aa[j, i] + bb[j, i] * cc[j, i]
-            a[i] = b[i] + c[i] * d[i]
+    for i in range(LEN_2D):
+        for j in range(LEN_2D):
+            aa[j, i] = aa[j, i] + bb[j, i] * cc[j, i]
+        a[i] = b[i] + c[i] * d[i]
 
