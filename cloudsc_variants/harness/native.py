@@ -13,10 +13,18 @@ import os
 import subprocess
 import numpy as np
 
-TRANSLATORS_SRC = "/home/primrose/Work/npbench/npbench/NumpyTranslators/src"
-# The translators were developed under py12; pin their interpreter so the
-# emit step is independent of whichever env runs the harness (py13/FaCe).
-PY12 = "/home/primrose/.pyenv/versions/py12/bin/python"
+import sys
+from pathlib import Path
+
+TRANSLATORS_SRC = str(
+    Path("/Users/alexbonsall/Desktop/ETH/Semester_Thesis/VectraArtifacts/npbench/npbench/NumpyTranslators/src")
+)
+PY12 = sys.executable
+
+# TRANSLATORS_SRC = "/home/primrose/Work/npbench/npbench/NumpyTranslators/src"
+# # The translators were developed under py12; pin their interpreter so the
+# # emit step is independent of whichever env runs the harness (py13/FaCe).
+# PY12 = "/home/primrose/.pyenv/versions/py12/bin/python"
 
 _GCC = ["gcc", "-O3", "-march=native", "-ffast-math", "-std=c17", "-shared", "-fPIC"]
 _GXX = ["g++", "-O3", "-march=native", "-ffast-math", "-std=c++17", "-shared", "-fPIC"]
