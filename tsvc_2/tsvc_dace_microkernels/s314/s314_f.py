@@ -7,10 +7,9 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s314_f(a: dace.float32[LEN_1D], result: dace.float32[1]):
-    for nl in range(ITERATIONS):
-        x = a[0]
-        for i in range(1, LEN_1D):
-            if a[i] > x:
-                x = a[i]
+    x = a[0]
+    for i in range(1, LEN_1D):
+        if a[i] > x:
+            x = a[i]
     result[0] = x
 

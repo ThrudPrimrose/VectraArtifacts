@@ -34,7 +34,7 @@ extern "C" {{
 }} // extern "C"
 """
 
-_FUNC_DEF_RE = re.compile(r'^(?:static\s+(?:inline\s+)?)?(?:void|double|int|float)\s+(\w+)\s*\(', re.MULTILINE)
+_FUNC_DEF_RE = re.compile(r'^(?:static\s+(?:inline\s+)?)?(?:void|double|int|float|long)\s+(\w+)\s*\(', re.MULTILINE)
 _TYPE_PATTERN = r'(?:double|float|int|void|char|\w+_t)'
 _RESTRICT_RE = re.compile(rf'({_TYPE_PATTERN})\s*\*\s*(?!__restrict__)(\w)')
 _FLOAT_LITERAL_RE = re.compile(r'(?<![.\w])(\d+\.\d*|\.\d+)(?![fFdDeE\w])')
@@ -61,7 +61,7 @@ def _parse_toplevel(src_lines: List[str]) -> List[_TopLevel]:
     i, n = 0, len(src_lines)
 
     preamble: List[str] = []
-    while i < n and not re.match(r'^(void|double|int|float|static)\s+\w+\s*\(', src_lines[i]):
+    while i < n and not re.match(r'^(?:static\s+(?:inline\s+)?)?(?:void|double|int|float|long)\s+\w+\s*\(', src_lines[i]):
         preamble.append(src_lines[i])
         i += 1
     if preamble:

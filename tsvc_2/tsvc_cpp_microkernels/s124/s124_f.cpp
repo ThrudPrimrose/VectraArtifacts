@@ -13,7 +13,7 @@ void s124_f(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     int j;
-    for (int nl = 0; nl < iterations; nl++) {
+    
       j = -1;
       for (int i = 0; i < len_1d; i++) {
         if (b[i] > 0.0f) {
@@ -24,7 +24,7 @@ void s124_f(float *__restrict__ a, const float *__restrict__ b,
           a[j] = c[i] + d[i] * e[i];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

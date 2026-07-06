@@ -12,13 +12,15 @@ void s1279_d_single(const double *__restrict__ a, const double *__restrict__ b,
                      std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_1d; ++i) {
-    if (a[i] < 0.0) {
-      if (b[i] > a[i]) {
-        c[i] += d[i] * e[i];
+  
+    for (int i = 0; i < len_1d; ++i) {
+      if (a[i] < 0.0) {
+        if (b[i] > a[i]) {
+          c[i] += d[i] * e[i];
+        }
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

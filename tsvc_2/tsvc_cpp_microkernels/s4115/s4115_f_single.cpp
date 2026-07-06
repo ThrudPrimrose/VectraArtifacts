@@ -14,10 +14,12 @@ void s4115_f_single(const float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   float sum = 0.0f;
-  sum = 0.0f;
-  for (int i = 0; i < len_1d; ++i) {
-    sum += a[i] * b[ip[i]];
-  }
+  
+    sum = 0.0f;
+    for (int i = 0; i < len_1d; ++i) {
+      sum += a[i] * b[ip[i]];
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

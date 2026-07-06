@@ -14,7 +14,7 @@ void s125_f(const float *__restrict__ aa,
   auto t1 = clock_highres::now();
   {
     int k;
-    for (int nl = 0; nl < 100 * (iterations / (len_2d)); nl++) {
+    
       k = -1;
       for (int i = 0; i < len_2d; i++) {
         for (int j = 0; j < len_2d; j++) {
@@ -23,7 +23,7 @@ void s125_f(const float *__restrict__ aa,
               aa[i * len_2d + j] + bb[i * len_2d + j] * cc[i * len_2d + j];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

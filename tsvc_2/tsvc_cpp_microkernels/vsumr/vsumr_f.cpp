@@ -14,12 +14,12 @@ void vsumr_f(const float *__restrict__ a, float *__restrict__ sum_out,
   auto t1 = clock_highres::now();
 
   float sum = 0.0f;
-  for (int nl = 0; nl < iterations * 10; ++nl) {
+  
     sum = 0.0f;
     for (int i = 0; i < len_1d; ++i) {
       sum += a[i];
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

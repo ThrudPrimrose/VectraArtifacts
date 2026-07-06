@@ -11,11 +11,11 @@ void s1421_d(const double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int half = len_1d / 2;
-  for (int nl = 0; nl < 8 * iterations; ++nl) {
+  
     for (int i = 0; i < half; ++i) {
       b[i] = b[half + i] + a[i];
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

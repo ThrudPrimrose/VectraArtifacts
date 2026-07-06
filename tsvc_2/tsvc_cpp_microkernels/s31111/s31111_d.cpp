@@ -22,13 +22,13 @@ void s31111_d(double *__restrict__ a, double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 2000 * iterations; nl++) {
+    
       double sum = 0.0;
       for (int base = 0; base < len_1d - 3; base += 4)
         sum += s31111_test_d(&a[base]);
 
       b[0] = sum;
-    }
+    
   }
 
   auto t2 = clock_highres::now();

@@ -13,13 +13,15 @@ void s292_f_single(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    int im1 = len_1d - 1;
-    int im2 = len_1d - 2;
-    for (int i = 0; i < len_1d; i++) {
-      a[i] = (b[i] + b[im1] + b[im2]) * 0.333f;
-      im2 = im1;
-      im1 = i;
-    }
+    
+      int im1 = len_1d - 1;
+      int im2 = len_1d - 2;
+      for (int i = 0; i < len_1d; i++) {
+        a[i] = (b[i] + b[im1] + b[im2]) * 0.333f;
+        im2 = im1;
+        im1 = i;
+      }
+    
   }
   auto t2 = clock_highres::now();
 

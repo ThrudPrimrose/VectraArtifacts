@@ -208,8 +208,11 @@ def split_dace(
     table = symbol_table or DEFAULT_SYMBOLS
     out_dir = Path(out_dir)
     for base, func_src in kernels.items():
-        _write_variant(base, "_d", func_src, out_dir, table, source_prefix, single_iter=False)
-        _write_variant(base, "_f", func_src, out_dir, table, source_prefix, single_iter=False)
+        # Strip the outer ``for nl in range(... ITERATIONS ...)`` timing
+        # loop (and any ``outer = EXPR`` it derives from) for ALL variants:
+        # the canonical kernel runs once and carries no ITERATIONS symbol.
+        _write_variant(base, "_d", func_src, out_dir, table, source_prefix, single_iter=True)
+        _write_variant(base, "_f", func_src, out_dir, table, source_prefix, single_iter=True)
         if emit_single:
             _write_variant(base, "_d_single", func_src, out_dir, table, source_prefix, single_iter=True)
             _write_variant(base, "_f_single", func_src, out_dir, table, source_prefix, single_iter=True)

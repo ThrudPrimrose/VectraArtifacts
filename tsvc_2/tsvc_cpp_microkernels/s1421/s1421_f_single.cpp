@@ -11,9 +11,11 @@ void s1421_f_single(const float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int half = len_1d / 2;
-  for (int i = 0; i < half; ++i) {
-    b[i] = b[half + i] + a[i];
-  }
+  
+    for (int i = 0; i < half; ++i) {
+      b[i] = b[half + i] + a[i];
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

@@ -1,0 +1,18 @@
+import dace
+import numpy as np
+from math import sin, cos, log, exp, pow
+
+LEN_2D = dace.symbol("LEN_2D")
+
+@dace.program
+def wavefront2d_f(a: dace.float32[LEN_2D, LEN_2D]):
+    """2D in-place relaxation with left + top + corner reads:
+    ``a[i, j] = 0.25 * (a[i, j] + a[i-1, j] + a[i, j-1] + a[i-1, j-1])``.
+
+    Dependence vectors ``(0, 1)``, ``(1, 0)``, ``(1, 1)`` make both loops
+    sequential as written; only the ``i + j`` anti-diagonal is parallel,
+    so ``WavefrontSkew`` must skew before ``LoopToMap`` can fire."""
+    for i in range(1, LEN_2D):
+        for j in range(1, LEN_2D):
+            a[i, j] = 0.25 * (a[i, j] + a[i - 1, j] + a[i, j - 1] + a[i - 1, j - 1])
+

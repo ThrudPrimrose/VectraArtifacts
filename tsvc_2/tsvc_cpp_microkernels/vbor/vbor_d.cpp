@@ -16,7 +16,7 @@ void vbor_d(const double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   double a1, b1, c1, d1, e1, f1;
-  for (int nl = 0; nl < iterations * 10; ++nl) {
+  
     for (int i = 0; i < len_2d; ++i) {
       a1 = a[i];
       b1 = b[i];
@@ -38,7 +38,7 @@ void vbor_d(const double *__restrict__ a, const double *__restrict__ b,
 
       x[i] = a1 * b1 * c1 * d1;
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

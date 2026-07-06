@@ -13,14 +13,14 @@ void s116_f(float *__restrict__ a, const int iterations,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations * 10; ++nl) {
+    
       for (int i = 0; i < len_1d - 4; i += 4) {
         a[i] = a[i + 1] * a[i];
         a[i + 1] = a[i + 2] * a[i + 1];
         a[i + 2] = a[i + 3] * a[i + 2];
         a[i + 3] = a[i + 4] * a[i + 3];
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

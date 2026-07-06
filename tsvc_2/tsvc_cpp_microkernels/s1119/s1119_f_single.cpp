@@ -5,6 +5,9 @@ using clock_highres = std::chrono::high_resolution_clock;
 
 extern "C" {
 
+static long idx_f_single(long i, long j, long n) { return i * n + j; }
+
+
 // ------------------------------------------------------------
 // s1119_f_single: 2D linear dependence testing — no dependence, vectorizable
 //        aa[i][j] = aa[i-1][j] + bb[i][j]
@@ -14,13 +17,14 @@ void s1119_f_single(float *__restrict__ aa, const float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    auto idx = [len_2d](int i, int j) { return i * len_2d + j; };
 
-    for (int i = 1; i < len_2d; ++i) {
-      for (int j = 0; j < len_2d; ++j) {
-        aa[idx(i, j)] = aa[idx(i - 1, j)] + bb[idx(i, j)];
+    
+      for (int i = 1; i < len_2d; ++i) {
+        for (int j = 0; j < len_2d; ++j) {
+          aa[idx_f_single(i, j, len_2d)] = aa[idx_f_single(i - 1, j, len_2d)] + bb[idx_f_single(i, j, len_2d)];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

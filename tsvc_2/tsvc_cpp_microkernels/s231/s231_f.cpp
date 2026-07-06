@@ -13,13 +13,13 @@ void s231_f(float *__restrict__ aa, const float *__restrict__ bb,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 100 * (iterations / len_2d); ++nl) {
+    
       for (int i = 0; i < len_2d; ++i) {
         for (int j = 1; j < len_2d; ++j) {
           aa[j * len_2d + i] = aa[(j - 1) * len_2d + i] + bb[j * len_2d + i];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

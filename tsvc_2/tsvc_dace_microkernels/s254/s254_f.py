@@ -7,9 +7,8 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s254_f(a: dace.float32[LEN_1D], b: dace.float32[LEN_1D]):
-    for nl in range(4 * ITERATIONS):
-        x = b[LEN_1D - 1]
-        for i in range(LEN_1D):
-            a[i] = (b[i] + x) * 0.5
-            x = b[i]
+    x = b[LEN_1D - 1]
+    for i in range(LEN_1D):
+        a[i] = (b[i] + x) * 0.5
+        x = b[i]
 

@@ -12,9 +12,8 @@ def s481_d(
     c: dace.float64[LEN_1D],
     d: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if d[i] < 0.0:
-                break
-            a[i] = a[i] + b[i] * c[i]
+    for i in range(LEN_1D):
+        if d[i] < 0.0:
+            break
+        a[i] = a[i] + b[i] * c[i]
 

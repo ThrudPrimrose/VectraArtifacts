@@ -12,11 +12,11 @@ void s131_d(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     int m = 1;
-    for (int nl = 0; nl < 5 * iterations; nl++) {
+    
       for (int i = 0; i < len_1d - 1; i++) {
         a[i] = a[i + m] + b[i];
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

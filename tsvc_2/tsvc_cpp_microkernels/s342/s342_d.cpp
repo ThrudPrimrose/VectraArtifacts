@@ -11,7 +11,7 @@ void s342_d(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int j = 0;
-  for (int nl = 0; nl < iterations; ++nl) {
+  
     j = -1;
     for (int i = 0; i < len_1d; ++i) {
       if (a[i] > 0.0) {
@@ -19,7 +19,7 @@ void s342_d(double *__restrict__ a, const double *__restrict__ b,
         a[i] = b[j];
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

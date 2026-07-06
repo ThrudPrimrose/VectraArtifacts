@@ -7,9 +7,8 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s2102_d(aa: dace.float64[LEN_2D, LEN_2D]):
-    for nl in range(100 * (ITERATIONS // LEN_2D)):
-        for i in range(LEN_2D):
-            for j in range(LEN_2D):
-                aa[j, i] = 0.0
-            aa[i, i] = 1.0
+    for i in range(LEN_2D):
+        for j in range(LEN_2D):
+            aa[j, i] = 0.0
+        aa[i, i] = 1.0
 

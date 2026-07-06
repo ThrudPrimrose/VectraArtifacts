@@ -12,9 +12,8 @@ def s222_d(
     c: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS // 2):
-        for i in range(1, LEN_1D):
-            a[i] = a[i] + b[i] * c[i]
-            e[i] = e[i - 1] * e[i - 1]
-            a[i] = a[i] - b[i] * c[i]
+    for i in range(1, LEN_1D):
+        a[i] = a[i] + b[i] * c[i]
+        e[i] = e[i - 1] * e[i - 1]
+        a[i] = a[i] - b[i] * c[i]
 

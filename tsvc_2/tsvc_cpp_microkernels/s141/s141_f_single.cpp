@@ -15,13 +15,15 @@ void s141_f_single(const float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_2d; ++i) {
-      int k = (i + 1) * (i) / 2 + (i);
-      for (int j = i; j < len_2d; ++j) {
-        flat_2d_array[k] += bb[j * len_2d + i];
-        k += (j + 1);
+    
+      for (int i = 0; i < len_2d; ++i) {
+        int k = (i + 1) * (i) / 2 + (i);
+        for (int j = i; j < len_2d; ++j) {
+          flat_2d_array[k] += bb[j * len_2d + i];
+          k += (j + 1);
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

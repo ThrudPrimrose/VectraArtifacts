@@ -21,7 +21,7 @@ void s315_f(float *__restrict__ a, float *__restrict__ result,
 
     float x;
     int index;
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       x = a[0];
       index = 0;
       for (int i = 0; i < len_1d; ++i) {
@@ -31,7 +31,7 @@ void s315_f(float *__restrict__ a, float *__restrict__ result,
         }
       }
       a[0] = x + static_cast<float>(index);
-    }
+    
     result[0] = a[0];
   }
   auto t2 = clock_highres::now();

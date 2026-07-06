@@ -4,10 +4,10 @@ Sibling of ``tsvc_2/tsvc_bindings.py`` -- same wrapper architecture
 (SIGNATURES table, ``_KernelWrapper``, ``__getattr__`` dispatch),
 re-pointed at the extension corpus's split+compile pipeline.
 
-The corpus C++ file declares 29 kernels, each with a ``<name>_d`` and
-``<name>_f`` variant; this module wires them as Python callables that
-take numpy arrays + scalars and return the per-call elapsed time in
-nanoseconds.
+The corpus C++ file declares one ``<name>_run_timed`` per kernel, each
+split into a ``<name>_d`` and ``<name>_f`` variant; this module wires
+them as Python callables that take numpy arrays + scalars and return the
+per-call elapsed time in nanoseconds.
 
 Usage::
 
@@ -129,6 +129,55 @@ SIGNATURES = {
     "quasi_affine_pairwise_sum":        [_CA("a"), _A("b"), _I("len_1d")],
     "quasi_affine_mod_k_stripe":        [_A("a"), _CA("b"), _CA("c"), _I("len_1d"), _I("k")],
     "quasi_affine_floor_div_scatter":   [_CA("a"), _A("b"), _I("len_1d")],
+
+    # %N  Wavefront / loop-skew
+    "wavefront2d":             [_A("a"), _I("len_2d")],
+
+    # %O  Early-exit / find-first (break loops)
+    "ext_break_find_first":    [_A("a"), _CA("b"), _CA("c"), _CA("d"), _I("len_1d")],
+    "ext_break_post_body":     [_A("a"), _CA("b"), _CA("c"), _I("len_1d")],
+    "ext_break_capture":       [_CA("a"), _I64A("out_index"), _A("out_value"), _I("len_1d"), _D("k")],
+
+    # %P  Conditional reduction
+    "cond_reduce_sum":         [_CA("a"), _A("out"), _I("len_1d")],
+    "cond_reduce_sym":         [_CA("a"), _A("out"), _I("len_1d"), _D("k")],
+
+    # %Q  Induction-variable closed form
+    "iv_additive":             [_A("out"), _I("len_1d")],
+    "iv_multiplicative":       [_A("out"), _I("len_1d")],
+
+    # %R  Argmax / argmin value
+    "argmax_value":            [_CA("a"), _A("out"), _I("len_1d")],
+    "argmin_value":            [_CA("a"), _A("out"), _I("len_1d")],
+
+    # %S  Negative stride + manual unroll
+    "neg_stride_rev":          [_A("a"), _CA("b"), _I("len_1d")],
+    "reroll_saxpy7":           [_A("a"), _CA("b"), _I("len_1d")],
+
+    # %T  Strided / multiple scans
+    "scan_strided_2":          [_A("a"), _CA("x"), _I("len_1d")],
+    "scan_strided_sym":        [_A("a"), _CA("x"), _I("len_1d"), _I("k")],
+    "scan_multi_carry":        [_A("a"), _A("b"), _CA("x"), _CA("y"), _I("len_1d")],
+
+    # %U  Canonicalize unit-test gap kernels
+    "scan_conditional":        [_A("out"), _CA("delta"), _I64A("mask"), _I("len_1d")],
+    "scan_multi_5carry":       [_A("acc"), _CA("delta"), _I("len_1d")],
+    "argmax_with_index":       [_CA("a"), _A("out_value"), _I64A("out_index"), _I("len_1d")],
+    "reroll_gather":           [_A("a"), _CA("b"), _I64A("ip"), _I("len_1d")],
+    "thomas_solve":            [_CA("a"), _CA("b"), _A("c"), _A("d"), _A("x"), _I("len_1d")],
+    "reduce_inner_carry":      [_CA("a"), _A("out"), _I("len_2d")],
+    "config_select_branch":    [_A("out_a"), _A("out_b"), _CA("src"), _I("len_1d"), _I("k")],
+    "move_if_data_dep_nest":   [_A("out"), _CA("src"), _CA("cond"), _I("len_2d")],
+    "fuse_move_ifs":           [_A("a"), _A("b"), _CA("src"), _CA("cond"), _I("len_2d"), _I("k")],
+
+    # %V  Transformation-test gap kernels (fusion / loop-to-map / indirect fission)
+    "fuse_stencil_through_transient": [_A("out"), _CA("a"), _I("len_1d")],
+    "fuse_diamond":               [_A("out"), _CA("a"), _I("len_1d")],
+    "loop_to_map_disjoint_strided": [_A("a"), _CA("b"), _I("len_1d")],
+    "loop_to_map_overlap_seq":    [_A("a"), _CA("b"), _I("len_1d")],
+    "loop_to_map_threshold_gather": [_A("out"), _CA("x"), _CA("y"), _CA("w"), _I64A("idx"), _I("len_2d")],
+    "fission_gather_2body":       [_A("b"), _A("e"), _CA("a"), _CA("c"), _I64A("idx"), _I("len_1d")],
+    "fission_scatter_2body":      [_A("b"), _A("e"), _CA("a"), _CA("c"), _I64A("idx"), _I("len_1d")],
 }
 # fmt: on
 

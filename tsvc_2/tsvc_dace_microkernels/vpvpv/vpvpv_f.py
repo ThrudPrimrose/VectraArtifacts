@@ -9,7 +9,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def vpvpv_f(
     a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], c: dace.float32[LEN_1D]
 ):
-    for nl in range(4 * ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = a[i] + b[i] + c[i]
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[i] + c[i]
 

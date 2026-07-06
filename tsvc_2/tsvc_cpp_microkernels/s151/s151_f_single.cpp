@@ -21,7 +21,9 @@ void s151_f_single(float *__restrict__ a, const float *__restrict__ b,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    s151s_kernel_f_single(a, b, len_1d, 1);
+    
+      s151s_kernel_f_single(a, b, len_1d, 1);
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

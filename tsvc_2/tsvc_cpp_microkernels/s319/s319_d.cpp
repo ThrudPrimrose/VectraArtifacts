@@ -16,7 +16,7 @@ void s319_d(double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     double sum;
-    for (int nl = 0; nl < 2 * iterations; ++nl) {
+    
       sum = 0.0;
       for (int i = 0; i < len_1d; ++i) {
         a[i] = c[i] + d[i];
@@ -25,7 +25,7 @@ void s319_d(double *__restrict__ a, double *__restrict__ b,
         sum += b[i];
       }
       b[0] = sum;
-    }
+    
   }
   auto t2 = clock_highres::now();
 

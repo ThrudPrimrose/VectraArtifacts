@@ -15,13 +15,13 @@ void s1281_f(float *__restrict__ a, float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 4 * iterations; nl++) {
+    
       for (int i = 0; i < len_1d; i++) {
         float x = b[i] * c[i] + a[i] * d[i] + e[i];
         a[i] = x - 1.0f;
         b[i] = x;
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

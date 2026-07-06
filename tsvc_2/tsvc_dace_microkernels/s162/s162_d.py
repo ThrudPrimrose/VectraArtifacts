@@ -12,8 +12,7 @@ def s162_d(
     c: dace.float64[LEN_1D],
     k: dace.int64,
 ):
-    for nl in range(ITERATIONS):
-        if k > 0:
-            for i in range(0, LEN_1D - k):
-                a[i] = a[i + k] + b[i] * c[i]
+    if k > 0:
+        for i in range(0, LEN_1D - k):
+            a[i] = a[i + k] + b[i] * c[i]
 

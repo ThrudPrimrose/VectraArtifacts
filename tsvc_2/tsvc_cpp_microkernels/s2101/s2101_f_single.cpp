@@ -14,9 +14,11 @@ void s2101_f_single(float *__restrict__ aa, const float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_2d; i++) {
-      aa[i * len_2d + i] += bb[i * len_2d + i] * cc[i * len_2d + i];
-    }
+    
+      for (int i = 0; i < len_2d; i++) {
+        aa[i * len_2d + i] += bb[i * len_2d + i] * cc[i * len_2d + i];
+      }
+    
   }
   auto t2 = clock_highres::now();
 

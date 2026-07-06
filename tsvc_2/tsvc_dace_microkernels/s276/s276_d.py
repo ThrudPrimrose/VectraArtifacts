@@ -13,10 +13,9 @@ def s276_d(
     d: dace.float64[LEN_1D],
 ):
     mid = LEN_1D // 2
-    for nl in range(4 * ITERATIONS):
-        for i in range(LEN_1D):
-            if i + 1 < mid:
-                a[i] = a[i] + b[i] * c[i]
-            else:
-                a[i] = a[i] + b[i] * d[i]
+    for i in range(LEN_1D):
+        if i + 1 < mid:
+            a[i] = a[i] + b[i] * c[i]
+        else:
+            a[i] = a[i] + b[i] * d[i]
 

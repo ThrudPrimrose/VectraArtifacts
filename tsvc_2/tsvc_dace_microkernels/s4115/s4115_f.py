@@ -13,9 +13,8 @@ def s4115_f(
     sum_out: dace.float32[1],
 ):
     sum_val = 0.0
-    for nl in range(ITERATIONS):
-        sum_val = 0.0
-        for i in range(LEN_1D):
-            sum_val = sum_val + a[i] * b[ip[i]]
+    sum_val = 0.0
+    for i in range(LEN_1D):
+        sum_val = sum_val + a[i] * b[ip[i]]
     sum_out[0] = sum_val
 

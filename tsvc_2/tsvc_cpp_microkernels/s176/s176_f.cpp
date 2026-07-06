@@ -15,13 +15,13 @@ void s176_f(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 4 * (iterations / len_1d); ++nl) {
+    
       for (int j = 0; j < (len_1d / 2); ++j) {
         for (int i = 0; i < m; ++i) {
           a[i] += b[i + m - j - 1] * c[j];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

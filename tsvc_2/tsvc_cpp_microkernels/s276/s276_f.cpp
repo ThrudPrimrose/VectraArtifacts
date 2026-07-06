@@ -12,7 +12,7 @@ void s276_f(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int mid = len_1d / 2;
-  for (int nl = 0; nl < 4 * iterations; ++nl) {
+  
     for (int i = 0; i < len_1d; ++i) {
       if (i + 1 < mid) {
         a[i] += b[i] * c[i];
@@ -20,7 +20,7 @@ void s276_f(float *__restrict__ a, const float *__restrict__ b,
         a[i] += b[i] * d[i];
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

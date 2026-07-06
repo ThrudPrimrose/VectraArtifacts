@@ -9,7 +9,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s424_f(
     a: dace.float32[LEN_1D], xx: dace.float32[LEN_1D], flat: dace.float32[LEN_1D]
 ):
-    for nl in range(4 * ITERATIONS):
-        for i in range(LEN_1D - 1):
-            xx[i + 1] = flat[i] + a[i]
+    for i in range(LEN_1D - 1):
+        xx[i + 1] = flat[i] + a[i]
 

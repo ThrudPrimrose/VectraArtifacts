@@ -15,13 +15,13 @@ void s3251_d(double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       for (int i = 0; i < len_1d - 1; i++) {
         a[i + 1] = b[i] + c[i];
         b[i] = c[i] * e[i];
         d[i] = a[i] * e[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

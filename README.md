@@ -18,17 +18,27 @@ pip install -e ".[dev]"   # adds pytest + yapf
 
 The `tsvc_2_5` kernels depend on the canonicalize + vectorization passes that
 live on the **`yakup/dev`** branch of [`spcl/dace`](https://github.com/spcl/dace),
-not yet in a tagged PyPI release. **Recommended:** clone DaCe and install it
-editable from a local path, so your DaCe edits are picked up immediately and a
-single `git pull` updates the backend:
+not yet in a tagged PyPI release. DaCe **must** be pinned to `yakup/dev` —
+`main` (and the PyPI release) lack these passes and will not work.
+**Recommended:** clone DaCe and install it editable from a local path, so your
+DaCe edits are picked up immediately and a single `git pull` updates the
+backend:
 
 ```bash
-git clone -b yakup/dev https://github.com/spcl/dace.git /path/to/dace
-pip install -e /path/to/dace   # editable DaCe checkout
-pip install -e ".[dev]"        # this repo (no [dace] — keeps your checkout)
+git clone https://github.com/spcl/dace.git /path/to/dace
+git -C /path/to/dace checkout yakup/dev   # REQUIRED: must be on yakup/dev
+pip install -e /path/to/dace              # editable DaCe checkout
+pip install -e ".[dev]"                   # this repo (no [dace] — keeps your checkout)
 
-# later, to update DaCe:
-git -C /path/to/dace pull
+# later, to update DaCe (stay on yakup/dev):
+git -C /path/to/dace checkout yakup/dev && git -C /path/to/dace pull
+```
+
+If you already have a DaCe checkout, switch it to the branch before
+installing — any other branch will fail to build the `tsvc_2_5` kernels:
+
+```bash
+git -C /path/to/dace checkout yakup/dev
 ```
 
 Alternatively, let the `[dace]` extra pull the branch directly (no local
@@ -36,10 +46,8 @@ checkout, but you can't edit DaCe and pip won't refetch on branch advance):
 
 ```bash
 pip install -e ".[dace]"
-# the extra resolves to:
+# the extra resolves to (always yakup/dev):
 #   dace @ git+https://github.com/spcl/dace.git@yakup/dev
-# pin a different branch/tag/commit by editing the ref in pyproject.toml, or:
-pip install -e . "dace @ git+https://github.com/spcl/dace.git@main"
 # force a refetch after the branch advances (pip caches the URL requirement):
 pip install -e ".[dace]" --force-reinstall --no-deps
 ```

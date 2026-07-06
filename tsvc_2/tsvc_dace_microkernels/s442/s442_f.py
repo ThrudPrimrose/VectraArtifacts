@@ -14,14 +14,13 @@ def s442_f(
     e: dace.float32[LEN_1D],
     indx: dace.int32[LEN_1D],
 ):
-    for nl in range(ITERATIONS // 2):
-        for i in range(LEN_1D):
-            if indx[i] == 1:
-                a[i] = a[i] + (b[i] * b[i])
-            elif indx[i] == 2:
-                a[i] = a[i] + (c[i] * c[i])
-            elif indx[i] == 3:
-                a[i] = a[i] + (d[i] * d[i])
-            elif indx[i] == 4:
-                a[i] = a[i] + (e[i] * e[i])
+    for i in range(LEN_1D):
+        if indx[i] == 1:
+            a[i] = a[i] + (b[i] * b[i])
+        elif indx[i] == 2:
+            a[i] = a[i] + (c[i] * c[i])
+        elif indx[i] == 3:
+            a[i] = a[i] + (d[i] * d[i])
+        elif indx[i] == 4:
+            a[i] = a[i] + (e[i] * e[i])
 

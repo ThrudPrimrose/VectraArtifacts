@@ -12,8 +12,7 @@ def s1213_d(
     c: dace.float64[LEN_1D],
     d: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(1, LEN_1D - 1):
-            a[i] = b[i - 1] + c[i]
-            b[i] = a[i + 1] * d[i]
+    for i in range(1, LEN_1D - 1):
+        a[i] = b[i - 1] + c[i]
+        b[i] = a[i + 1] * d[i]
 

@@ -15,13 +15,15 @@ void s2275_d_single(double *__restrict__ a, double *__restrict__ aa,
                      std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_2d; ++i) {
-    for (int j = 0; j < len_2d; ++j) {
-      int idx = j * len_2d + i;
-      aa[idx] = aa[idx] + bb[idx] * cc[idx];
+  
+    for (int i = 0; i < len_2d; ++i) {
+      for (int j = 0; j < len_2d; ++j) {
+        int idx = j * len_2d + i;
+        aa[idx] = aa[idx] + bb[idx] * cc[idx];
+      }
+      a[i] = b[i] + c[i] * d[i];
     }
-    a[i] = b[i] + c[i] * d[i];
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

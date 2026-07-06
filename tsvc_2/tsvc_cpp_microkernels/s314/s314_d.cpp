@@ -15,14 +15,14 @@ void s314_d(const double *__restrict__ a, double *__restrict__ result,
   auto t1 = clock_highres::now();
   {
     double x;
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       x = a[0];
       for (int i = 0; i < len_1d; ++i) {
         if (a[i] > x) {
           x = a[i];
         }
       }
-    }
+    
     result[0] = x;
   }
   auto t2 = clock_highres::now();

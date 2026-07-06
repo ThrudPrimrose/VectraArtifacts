@@ -12,7 +12,7 @@ void s1279_d(const double *__restrict__ a, const double *__restrict__ b,
                      std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int nl = 0; nl < iterations; ++nl) {
+  
     for (int i = 0; i < len_1d; ++i) {
       if (a[i] < 0.0) {
         if (b[i] > a[i]) {
@@ -20,7 +20,7 @@ void s1279_d(const double *__restrict__ a, const double *__restrict__ b,
         }
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

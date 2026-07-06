@@ -14,14 +14,16 @@ void s275_f_single(float *__restrict__ aa, const float *__restrict__ bb,
   auto t1 = clock_highres::now();
 
   {
-    for (int i = 0; i < len_2d; i++) {
-      if (aa[i] > 0.0f) {
-        for (int j = 1; j < len_2d; j++) {
-          aa[j * len_2d + i] = aa[(j - 1) * len_2d + i] +
-                               bb[j * len_2d + i] * cc[j * len_2d + i];
+    
+      for (int i = 0; i < len_2d; i++) {
+        if (aa[i] > 0.0f) {
+          for (int j = 1; j < len_2d; j++) {
+            aa[j * len_2d + i] = aa[(j - 1) * len_2d + i] +
+                                 bb[j * len_2d + i] * cc[j * len_2d + i];
+          }
         }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

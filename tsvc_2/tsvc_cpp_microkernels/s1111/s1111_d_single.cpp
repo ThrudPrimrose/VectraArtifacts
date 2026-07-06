@@ -14,12 +14,14 @@ void s1111_d_single(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     const int half = len_1d / 2;
-    for (int i = 0; i < half; ++i) {
-      const double bi = b[i];
-      const double ci = c[i];
-      const double di = d[i];
-      a[2 * i] = ci * bi + di * bi + ci * ci + di * bi + di * ci;
-    }
+    
+      for (int i = 0; i < half; ++i) {
+        const double bi = b[i];
+        const double ci = c[i];
+        const double di = d[i];
+        a[2 * i] = ci * bi + di * bi + ci * ci + di * bi + di * ci;
+      }
+    
   }
   auto t2 = clock_highres::now();
 

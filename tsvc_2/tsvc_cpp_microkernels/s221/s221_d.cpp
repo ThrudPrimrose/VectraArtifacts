@@ -15,12 +15,12 @@ void s221_d(double *__restrict__ a, double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations / 2; ++nl) {
+    
       for (int i = 1; i < len_1d; ++i) {
         a[i] += c[i] * d[i];
         b[i] = b[i - 1] + a[i] + d[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

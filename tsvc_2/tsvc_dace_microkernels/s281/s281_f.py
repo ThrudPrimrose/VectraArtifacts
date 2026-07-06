@@ -9,9 +9,8 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s281_f(
     a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], c: dace.float32[LEN_1D]
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            x = a[LEN_1D - i - 1] + b[i] * c[i]
-            a[i] = x - 1.0
-            b[i] = x
+    for i in range(LEN_1D):
+        x = a[LEN_1D - i - 1] + b[i] * c[i]
+        a[i] = x - 1.0
+        b[i] = x
 

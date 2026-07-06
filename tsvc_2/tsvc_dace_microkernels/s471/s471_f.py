@@ -13,8 +13,7 @@ def s471_f(
     d: dace.float32[LEN_1D],
     e: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS // 2):
-        for i in range(LEN_1D):
-            x[i] = b[i] + d[i] * d[i]
-            b[i] = c[i] + d[i] * e[i]
+    for i in range(LEN_1D):
+        x[i] = b[i] + d[i] * d[i]
+        b[i] = c[i] + d[i] * e[i]
 

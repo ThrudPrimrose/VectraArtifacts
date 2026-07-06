@@ -21,12 +21,12 @@ void s152_d(double *__restrict__ a, double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       for (int i = 0; i < len_1d; ++i) {
         b[i] = d[i] * e[i];
         s152s_kernel_d(a, b, c, i);
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

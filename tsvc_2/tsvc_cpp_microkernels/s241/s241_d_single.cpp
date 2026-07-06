@@ -15,10 +15,12 @@ void s241_d_single(double *__restrict__ a, double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_1d - 1; ++i) {
-      a[i] = b[i] * c[i] * d[i];
-      b[i] = a[i] * a[i + 1] * d[i];
-    }
+    
+      for (int i = 0; i < len_1d - 1; ++i) {
+        a[i] = b[i] * c[i] * d[i];
+        b[i] = a[i] * a[i + 1] * d[i];
+      }
+    
   }
 
   auto t2 = clock_highres::now();

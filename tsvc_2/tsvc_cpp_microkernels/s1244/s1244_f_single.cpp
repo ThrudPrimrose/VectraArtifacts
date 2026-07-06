@@ -14,10 +14,12 @@ void s1244_f_single(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int i = 0; i < len_1d - 1; i++) {
-      a[i] = b[i] + c[i] * c[i] + b[i] * b[i] + c[i];
-      d[i] = a[i] + a[i + 1];
-    }
+    
+      for (int i = 0; i < len_1d - 1; i++) {
+        a[i] = b[i] + c[i] * c[i] + b[i] * b[i] + c[i];
+        d[i] = a[i] + a[i + 1];
+      }
+    
   }
 
   auto t2 = clock_highres::now();

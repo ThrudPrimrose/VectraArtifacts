@@ -15,10 +15,12 @@ void vdotr_f_single(const float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   float dot = 0.0f;
-  dot = 0.0f;
-  for (int i = 0; i < len_1d; ++i) {
-    dot += a[i] * b[i];
-  }
+  
+    dot = 0.0f;
+    for (int i = 0; i < len_1d; ++i) {
+      dot += a[i] * b[i];
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

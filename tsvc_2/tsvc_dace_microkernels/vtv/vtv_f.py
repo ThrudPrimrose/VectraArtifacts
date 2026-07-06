@@ -7,7 +7,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def vtv_f(a: dace.float32[LEN_1D], b: dace.float32[LEN_1D]):
-    for nl in range(ITERATIONS * 10):
-        for i in range(LEN_1D):
-            a[i] = a[i] * b[i]
+    for i in range(LEN_1D):
+        a[i] = a[i] * b[i]
 

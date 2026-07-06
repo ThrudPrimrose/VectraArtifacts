@@ -15,7 +15,7 @@ void s161_d(double *__restrict__ a, const double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations / 2; ++nl) {
+    
       // ``c[i + 1]`` write: loop to ``len_1d - 1`` so the store stays in
       // bounds (upstream TSVC s161_d loops ``i < len_1d - 1``).
       for (int i = 0; i < len_1d - 1; ++i) {
@@ -28,7 +28,7 @@ void s161_d(double *__restrict__ a, const double *__restrict__ b,
           a[i] = c[i] + d[i] * e[i];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

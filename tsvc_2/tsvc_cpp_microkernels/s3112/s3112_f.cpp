@@ -17,13 +17,13 @@ void s3112_f(const float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   float sum;
-  for (int nl = 0; nl < iterations; ++nl) {
+  
     sum = 0.0f;
     for (int i = 0; i < len_1d; ++i) {
       sum += a[i];
       b[i] = sum;
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

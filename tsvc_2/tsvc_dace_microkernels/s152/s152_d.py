@@ -13,9 +13,8 @@ def s152_d(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            b[i] = d[i] * e[i]
-        for i in range(LEN_1D):
-            a[i] = a[i] + b[i] * c[i]
+    for i in range(LEN_1D):
+        b[i] = d[i] * e[i]
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[i] * c[i]
 

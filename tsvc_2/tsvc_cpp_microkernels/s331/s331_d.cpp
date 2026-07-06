@@ -15,7 +15,7 @@ void s331_d(const double *__restrict__ a, double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int j = -1;
-  for (int nl = 0; nl < iterations; ++nl) {
+  
     j = -1;
     for (int i = 0; i < len_1d; ++i) {
       if (a[i] < 0.0) {
@@ -23,7 +23,7 @@ void s331_d(const double *__restrict__ a, double *__restrict__ b,
       }
     }
     // chksum = (real_t) j;  // ignored in timed version
-  }
+  
   b[0] = j;
 
   auto t2 = clock_highres::now();

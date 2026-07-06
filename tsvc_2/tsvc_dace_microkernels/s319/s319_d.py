@@ -13,12 +13,11 @@ def s319_d(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(2 * ITERATIONS):
-        sum_val = 0.0
-        for i in range(LEN_1D):
-            a[i] = c[i] + d[i]
-            sum_val = sum_val + a[i]
-            b[i] = c[i] + e[i]
-            sum_val = sum_val + b[i]
-        b[0] = sum_val
+    sum_val = 0.0
+    for i in range(LEN_1D):
+        a[i] = c[i] + d[i]
+        sum_val = sum_val + a[i]
+        b[i] = c[i] + e[i]
+        sum_val = sum_val + b[i]
+    b[0] = sum_val
 

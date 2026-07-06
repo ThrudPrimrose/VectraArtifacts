@@ -15,13 +15,13 @@ void s4114_f(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int k;
-  for (int nl = 0; nl < iterations; ++nl) {
+  
     for (int i = n1 - 1; i < len_1d; ++i) {
       k = ip[i];
       a[i] = b[i] + c[len_1d - k - 1] * d[i];
       k += 5; // has no effect on further iterations, kept for fidelity
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

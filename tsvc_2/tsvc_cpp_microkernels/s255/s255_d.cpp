@@ -13,7 +13,7 @@ void s255_d(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       double x = b[len_1d - 1];
       double y = b[len_1d - 2];
       for (int i = 0; i < len_1d; i++) {
@@ -21,7 +21,7 @@ void s255_d(double *__restrict__ a, const double *__restrict__ b,
         y = x;
         x = b[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

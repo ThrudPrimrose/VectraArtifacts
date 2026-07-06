@@ -14,7 +14,7 @@ void s332_d(const double *__restrict__ a, double *__restrict__ result,
   {
     int index;
     double value;
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       index = -2;
       value = -1.0;
       for (int i = 0; i < len_1d; ++i) {
@@ -25,7 +25,7 @@ void s332_d(const double *__restrict__ a, double *__restrict__ result,
         }
       }
       result[0] = value + static_cast<double>(index);
-    }
+    
   }
   auto t2 = clock_highres::now();
 

@@ -13,10 +13,9 @@ def s1161_d(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if c[i] < 0.0:
-                b[i] = a[i] + d[i] * d[i]
-            else:
-                a[i] = c[i] + d[i] * e[i]
+    for i in range(LEN_1D):
+        if c[i] < 0.0:
+            b[i] = a[i] + d[i] * d[i]
+        else:
+            a[i] = c[i] + d[i] * e[i]
 

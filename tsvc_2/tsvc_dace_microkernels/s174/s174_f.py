@@ -8,7 +8,6 @@ M = dace.symbol("M")
 
 @dace.program
 def s174_f(a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], M: dace.int64):
-    for nl in range(10 * ITERATIONS):
-        for i in range(M):
-            a[i + M] = a[i] + b[i]
+    for i in range(M):
+        a[i + M] = a[i] + b[i]
 

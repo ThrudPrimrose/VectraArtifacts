@@ -7,8 +7,7 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def vif_f(a: dace.float32[LEN_1D], b: dace.float32[LEN_1D]):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if b[i] > 0.0:
-                a[i] = b[i]
+    for i in range(LEN_1D):
+        if b[i] > 0.0:
+            a[i] = b[i]
 

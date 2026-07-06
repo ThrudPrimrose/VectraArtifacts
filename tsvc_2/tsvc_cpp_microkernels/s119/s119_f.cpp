@@ -15,7 +15,7 @@ void s119_f(float *__restrict__ aa, const float *__restrict__ bb,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 200 * (iterations / (len_2d)); ++nl) {
+    
       for (int i = 1; i < len_2d; ++i) {
         for (int j = 1; j < len_2d; ++j) {
           const int idx_ij = i * len_2d + j;               // [i][j]
@@ -23,7 +23,7 @@ void s119_f(float *__restrict__ aa, const float *__restrict__ bb,
           aa[idx_ij] = aa[idx_im1j] + bb[idx_ij];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

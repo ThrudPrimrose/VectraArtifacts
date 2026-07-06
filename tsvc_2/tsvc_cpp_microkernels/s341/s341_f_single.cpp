@@ -15,13 +15,15 @@ void s341_f_single(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int j;
-  j = -1;
-  for (int i = 0; i < len_1d; ++i) {
-    if (b[i] > 0.0f) {
-      ++j;
-      a[j] = b[i];
+  
+    j = -1;
+    for (int i = 0; i < len_1d; ++i) {
+      if (b[i] > 0.0f) {
+        ++j;
+        a[j] = b[i];
+      }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

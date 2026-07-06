@@ -9,7 +9,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s4112_f(
     a: dace.float32[LEN_1D], b: dace.float32[LEN_1D], ip: dace.int32[LEN_1D]
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = a[i] + b[ip[i]] * 2.0
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[ip[i]] * 2.0
 

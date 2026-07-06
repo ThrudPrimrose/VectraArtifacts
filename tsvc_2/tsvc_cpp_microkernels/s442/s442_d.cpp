@@ -14,7 +14,7 @@ void s442_d(double *__restrict__ a, const double *__restrict__ b,
                     int iterations, int len_1d, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int nl = 0; nl < iterations / 2; ++nl) {
+  
     for (int i = 0; i < len_1d; ++i) {
       switch (indx[i]) {
       case 1:
@@ -33,7 +33,7 @@ void s442_d(double *__restrict__ a, const double *__restrict__ b,
         break;
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

@@ -14,13 +14,13 @@ void s162_f(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       if (k > 0) {
         for (int i = 0; i < len_1d - k; ++i) {
           a[i] = a[i + k] + b[i] * c[i];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

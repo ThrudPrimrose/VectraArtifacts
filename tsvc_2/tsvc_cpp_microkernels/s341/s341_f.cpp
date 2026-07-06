@@ -15,7 +15,7 @@ void s341_f(float *__restrict__ a, const float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   int j;
-  for (int nl = 0; nl < iterations; ++nl) {
+  
     j = -1;
     for (int i = 0; i < len_1d; ++i) {
       if (b[i] > 0.0f) {
@@ -23,7 +23,7 @@ void s341_f(float *__restrict__ a, const float *__restrict__ b,
         a[j] = b[i];
       }
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

@@ -17,20 +17,22 @@ void s318_f_single(const float *__restrict__ a, float *__restrict__ result,
     int k, index;
     float maxv = 0.0f;
     float chksum = 0.0f;
-    k = 0;
-    index = 0;
-    maxv = std::fabs(a[0]);
-    k += inc;
-    for (int i = 1; i < len_1d; ++i) {
-      float v = std::fabs(a[k]);
-      if (v > maxv) {
-        index = i;
-        maxv = v;
-      }
+    
+      k = 0;
+      index = 0;
+      maxv = std::fabs(a[0]);
       k += inc;
-    }
-    chksum = maxv + static_cast<float>(index);
-    result[0] = chksum;
+      for (int i = 1; i < len_1d; ++i) {
+        float v = std::fabs(a[k]);
+        if (v > maxv) {
+          index = i;
+          maxv = v;
+        }
+        k += inc;
+      }
+      chksum = maxv + static_cast<float>(index);
+      result[0] = chksum;
+    
   }
   auto t2 = clock_highres::now();
 

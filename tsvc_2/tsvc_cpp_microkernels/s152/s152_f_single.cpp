@@ -21,10 +21,12 @@ void s152_f_single(float *__restrict__ a, float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_1d; ++i) {
-      b[i] = d[i] * e[i];
-      s152s_kernel_f_single(a, b, c, i);
-    }
+    
+      for (int i = 0; i < len_1d; ++i) {
+        b[i] = d[i] * e[i];
+        s152s_kernel_f_single(a, b, c, i);
+      }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

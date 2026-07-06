@@ -513,6 +513,547 @@ def quasi_affine_floor_div_scatter(a: dace.float64[2 * LEN_1D], b: dace.float64[
         b[i // 2] = b[i // 2] + a[i]
 
 
+# ==========================================================================
+#  %N  Wavefront / loop-skew (2D anti-diagonal parallelism)
+# ==========================================================================
+#
+# A perfectly-nested 2D update whose body reads the left (``a[i, j-1]``)
+# and top (``a[i-1, j]``) neighbours carries dependence vectors ``(0, 1)``
+# and ``(1, 0)``. Neither loop is parallel on its own, but the
+# anti-diagonal ``i + j = const`` is: the ``WavefrontSkew`` canonicalize
+# pass applies the classical ``(i, j) -> (i + j, j)`` skew so the inner
+# loop becomes a parallel Map. The base TSVC kernel is ``s2111``.
+
+
+@dace.program
+def wavefront2d(a: dace.float64[LEN_2D, LEN_2D]):
+    """2D in-place relaxation with left + top + corner reads:
+    ``a[i, j] = 0.25 * (a[i, j] + a[i-1, j] + a[i, j-1] + a[i-1, j-1])``.
+
+    Dependence vectors ``(0, 1)``, ``(1, 0)``, ``(1, 1)`` make both loops
+    sequential as written; only the ``i + j`` anti-diagonal is parallel,
+    so ``WavefrontSkew`` must skew before ``LoopToMap`` can fire."""
+    for i in range(1, LEN_2D):
+        for j in range(1, LEN_2D):
+            a[i, j] = 0.25 * (a[i, j] + a[i - 1, j] + a[i, j - 1] + a[i - 1, j - 1])
+
+
+# ==========================================================================
+#  %O  Early-exit / find-first (break loops)
+# ==========================================================================
+#
+# ``for i: ... if cond(i): break; ...`` loops lower to a sequential scan
+# the ``EarlyExitToFindIndex`` pass rewrites into a parallel find-first
+# reduction plus body Maps clipped to the discovered bound. Base TSVC
+# kernels: ``s481`` (guard before body), ``s482`` (guard after body),
+# ``s332`` (find-first-above-threshold with index/value capture).
+
+
+@dace.program
+def ext_break_find_first(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D],
+                         d: dace.float64[LEN_1D]):
+    """TSVC ``s481``: guard checked *before* the body. ``if d[i] < 0: break``
+    then ``a[i] = a[i] + b[i] * c[i]``. The break bound is data-dependent
+    on ``d``; the lift needs a find-first ``min`` reduction over
+    ``{i : d[i] < 0}`` before the body can run as a clipped parallel Map."""
+    for i in range(LEN_1D):
+        if d[i] < 0.0:
+            break
+        a[i] = a[i] + b[i] * c[i]
+
+
+@dace.program
+def ext_break_post_body(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D]):
+    """TSVC ``s482``: body runs *before* the guard. ``a[i] = a[i] + b[i]*c[i]``
+    then ``if c[i] > b[i]: break``. The breaking iteration's write is
+    retained, so the find-first bound is inclusive -- a different clip
+    than :func:`ext_break_find_first`."""
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[i] * c[i]
+        if c[i] > b[i]:
+            break
+
+
+@dace.program
+def ext_break_capture(a: dace.float64[LEN_1D], out_index: dace.int64[1], out_value: dace.float64[1]):
+    """TSVC ``s332`` with a symbolic threshold ``K`` (bound as a double):
+    find the first ``i`` with ``a[i] > K``, capture its index and value,
+    and break. The scalar rebind at the exit edge is what
+    ``EarlyExitToFindIndex`` must reconstruct as an argmin-of-index."""
+    out_index[0] = -1
+    out_value[0] = -1.0
+    for i in range(LEN_1D):
+        if a[i] > K:
+            out_index[0] = i
+            out_value[0] = a[i]
+            break
+
+
+# ==========================================================================
+#  %P  Conditional reduction (predicated accumulate)
+# ==========================================================================
+#
+# ``if cond(i): acc = acc OP expr`` sits inside a ConditionalBlock, so the
+# state-level ``AugAssignToWCR`` matcher cannot reach it and the carry on
+# ``acc`` blocks ``LoopToMap``. ``LoopToConditionalReduce`` masks the
+# addend with the OP identity on the false branch so the loop lifts to a
+# parallel Map with a WCR-on-scalar reduction. Base TSVC kernel: ``s3111``.
+
+
+@dace.program
+def cond_reduce_sum(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """TSVC ``s3111``: ``if a[i] > 0: out += a[i]``. Conditional ``+=``
+    accumulator; the false branch contributes the additive identity 0."""
+    out[0] = 0.0
+    for i in range(LEN_1D):
+        if a[i] > 0.0:
+            out[0] = out[0] + a[i]
+
+
+@dace.program
+def cond_reduce_sym(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """Symbolic-threshold sibling of :func:`cond_reduce_sum`:
+    ``if a[i] > K: out += a[i]`` with ``K`` bound as a double. The
+    predicate's symbolic comparison forces the mask to be computed at
+    runtime before the WCR reduction."""
+    out[0] = 0.0
+    for i in range(LEN_1D):
+        if a[i] > K:
+            out[0] = out[0] + a[i]
+
+
+# ==========================================================================
+#  %Q  Induction-variable closed form (scalar evolution)
+# ==========================================================================
+#
+# ``acc = acc OP const`` over ``N`` iterations is a scalar recurrence with
+# a closed form (Aho/Lam/Sethi/Ullman Ch. 9.6, LLVM ``IndVarSimplify``).
+# ``InductionVariableSubstitution`` collapses the ``O(N)`` loop to ``O(1)``
+# straight-line code. The addend/factor must be a literal constant (not a
+# per-element read) for the closed form to exist.
+
+
+@dace.program
+def iv_additive(out: dace.float64[1]):
+    """Additive induction variable: ``s = 0; for i in range(LEN_1D): s += 1.5``.
+    Closed form ``s = 1.5 * LEN_1D``. The trip count is the symbol
+    ``LEN_1D``; there is no per-element data, so the loop is a pure
+    recurrence the substitution eliminates."""
+    s = 0.0
+    for i in range(LEN_1D):
+        s = s + 1.5
+    out[0] = s
+
+
+@dace.program
+def iv_multiplicative(out: dace.float64[1]):
+    """Multiplicative induction variable: ``s = 1; for i: s *= 0.99``.
+    Closed form ``s = 0.99 ** LEN_1D`` -- the geometric-product case that
+    distinguishes scalar evolution from a plain reduction."""
+    s = 1.0
+    for i in range(LEN_1D):
+        s = s * 0.99
+    out[0] = s
+
+
+# ==========================================================================
+#  %R  Argmax / argmin value reduction (conditional carry -> Reduce)
+# ==========================================================================
+#
+# ``x = a[0]; for i: if a[i] OP x: x = a[i]`` is a max/min reduction hidden
+# behind a conditional scalar carry. ``ArgMaxLift`` recognises the chain
+# and replaces the loop with a ``Reduce`` libnode (``Max`` for ``>``/``>=``,
+# ``Min`` for ``<``/``<=``). Base TSVC kernels: ``s314`` / ``s316``.
+
+
+@dace.program
+def argmax_value(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """TSVC ``s314``: running maximum carried in a scalar.
+    ``x = a[0]; for i in range(1, LEN_1D): if a[i] > x: x = a[i]``.
+    ``ArgMaxLift`` rewrites this to ``Reduce(Max, a)``."""
+    x = a[0]
+    for i in range(1, LEN_1D):
+        if a[i] > x:
+            x = a[i]
+    out[0] = x
+
+
+@dace.program
+def argmin_value(a: dace.float64[LEN_1D], out: dace.float64[1]):
+    """TSVC ``s316``: running minimum sibling of :func:`argmax_value`.
+    ``x = a[0]; for i: if a[i] < x: x = a[i]`` -> ``Reduce(Min, a)``."""
+    x = a[0]
+    for i in range(1, LEN_1D):
+        if a[i] < x:
+            x = a[i]
+    out[0] = x
+
+
+# ==========================================================================
+#  %S  Negative-stride loop + manually-unrolled lane chain
+# ==========================================================================
+#
+# Two normalization anchors that block ``LoopToMap`` until rewritten:
+# ``NormalizeNegativeStride`` flips a literal negative-stride loop to
+# positive form (base TSVC ``s112``), and ``RerollUnrolledLoops`` collapses
+# a hand-unrolled step-``m`` lane chain back to a unit-step loop (base
+# TSVC ``s351``).
+
+
+@dace.program
+def neg_stride_rev(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
+    """Reverse-iteration write with no carried dependence:
+    ``for i in range(LEN_1D - 1, -1, -1): a[i] = b[i] + 1``. Parallel in
+    principle, but the negative literal stride defeats ``LoopToMap``'s
+    affine-subset classifier until ``NormalizeNegativeStride`` rewrites it
+    to positive form."""
+    for i in range(LEN_1D - 1, -1, -1):
+        a[i] = b[i] + 1.0
+
+
+@dace.program
+def reroll_saxpy7(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
+    """TSVC ``s351``: a saxpy hand-unrolled 7x. Seven structurally-identical
+    lanes at offsets ``{0..6}`` over a step-7 loop look like one strided
+    ``7*i + k`` access that blocks ``LoopToMap``; ``RerollUnrolledLoops``
+    re-rolls to a unit-step loop first. The unroll factor is deliberately
+    a **prime** (7) so it cannot coincide with any vector width -- the
+    lane chain never accidentally tiles a SIMD register, so the reroll is
+    genuinely required rather than a lucky alignment. Requires ``LEN_1D``
+    divisible by 7."""
+    for i in range(0, LEN_1D - 6, 7):
+        a[i] = a[i] + b[i] * 2.0
+        a[i + 1] = a[i + 1] + b[i + 1] * 2.0
+        a[i + 2] = a[i + 2] + b[i + 2] * 2.0
+        a[i + 3] = a[i + 3] + b[i + 3] * 2.0
+        a[i + 4] = a[i + 4] + b[i + 4] * 2.0
+        a[i + 5] = a[i + 5] + b[i + 5] * 2.0
+        a[i + 6] = a[i + 6] + b[i + 6] * 2.0
+
+
+# ==========================================================================
+#  %T  Strided / multiple scans (prefix recurrences -> Scan libnodes)
+# ==========================================================================
+#
+# A prefix recurrence ``a[i] = a[i - stride] OP x[i]`` is the textbook
+# ``LoopToScan`` target. Two extensions force the pipeline to emit *more
+# than one* Scan libnode: a stride > 1 splits the array into independent
+# per-residue-class subsequences (one Scan each), and a body with two
+# distinct recurrences needs one Scan per carry. Base TSVC scan kernels
+# (``s242`` / ``s1221`` / ``s221``) are all single unit-stride scans.
+
+
+@dace.program
+def scan_strided_2(a: dace.float64[LEN_1D], x: dace.float64[LEN_1D]):
+    """Stride-2 prefix sum: ``a[i] = a[i-2] + x[i]``. The even- and
+    odd-indexed subsequences are two INDEPENDENT prefix sums, so
+    ``LoopToScan`` must emit two Scan libnodes (one per residue class
+    mod 2) rather than one. Caller initializes ``a[0]`` and ``a[1]``."""
+    for i in range(2, LEN_1D):
+        a[i] = a[i - 2] + x[i]
+
+
+@dace.program
+def scan_strided_sym(a: dace.float64[LEN_1D], x: dace.float64[LEN_1D]):
+    """Symbolic-stride prefix sum: ``a[i] = a[i-K] + x[i]``. Decomposes
+    into ``K`` independent prefix sums (one per residue class mod ``K``),
+    so the Scan count is a runtime symbol -- the pipeline lifts it to a
+    single stride-``K`` vector Scan. Caller initializes ``a[0..K-1]``."""
+    for i in range(K, LEN_1D):
+        a[i] = a[i - K] + x[i]
+
+
+@dace.program
+def scan_multi_carry(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], x: dace.float64[LEN_1D],
+                     y: dace.float64[LEN_1D]):
+    """Two distinct unit-stride recurrences in one loop body: an additive
+    scan on ``a`` and a multiplicative scan on ``b``. ``LoopToScan`` must
+    emit two Scan libnodes with different operators (Add and Mul) from the
+    same loop. Caller initializes ``a[0]`` and ``b[0]``."""
+    for i in range(1, LEN_1D):
+        a[i] = a[i - 1] + x[i]
+        b[i] = b[i - 1] * y[i]
+
+
+# ==========================================================================
+#  %U  Canonicalize unit-test gap kernels
+# ==========================================================================
+#
+# Patterns drawn from the DaCe canonicalize unit tests that the families
+# above do not isolate: a guarded prefix scan, many parallel scan carries
+# (cloudsc pfsqrf), argmax with index capture (s315), an indirect-gather
+# manual unroll (s353), the tridiagonal Thomas two-sweep solve, an
+# outer-parallel/inner-carried reduction, and a loop-invariant config-flag
+# branch select.
+
+
+@dace.program
+def scan_conditional(out: dace.float64[LEN_1D], delta: dace.float64[LEN_1D], mask: dace.int64[LEN_1D]):
+    """Masked prefix scan: the running sum advances only where ``mask[i]``
+    is set, otherwise it holds. ``LoopToScan`` must descend into the
+    ConditionalBlock and treat the false branch as the additive identity.
+    Caller seeds ``out[0]``."""
+    for i in range(1, LEN_1D):
+        if mask[i] > 0:
+            out[i] = out[i - 1] + delta[i]
+        else:
+            out[i] = out[i - 1]
+
+
+@dace.program
+def scan_multi_5carry(acc: dace.float64[5, LEN_1D], delta: dace.float64[5, LEN_1D]):
+    """Five INDEPENDENT prefix sums carried in one loop body (the cloudsc
+    ``pfsqrf`` shape): ``acc[r, i] = acc[r, i-1] + delta[r, i]`` for
+    ``r = 0..4``. ``LoopToScan`` must match all five carries and emit five
+    Scan libnodes (or one vectorized row-Scan). Caller seeds ``acc[:, 0]``."""
+    for i in range(1, LEN_1D):
+        acc[0, i] = acc[0, i - 1] + delta[0, i]
+        acc[1, i] = acc[1, i - 1] + delta[1, i]
+        acc[2, i] = acc[2, i - 1] + delta[2, i]
+        acc[3, i] = acc[3, i - 1] + delta[3, i]
+        acc[4, i] = acc[4, i - 1] + delta[4, i]
+
+
+@dace.program
+def argmax_with_index(a: dace.float64[LEN_1D], out_value: dace.float64[1], out_index: dace.int64[1]):
+    """TSVC ``s315``: running maximum carrying BOTH the value and its
+    index. ``x = a[0]; idx = 0; for i: if a[i] > x: x = a[i]; idx = i``.
+    The two-accumulator conditional (value + index) is the ``ArgMaxLift``
+    index-capture variant that value-only :func:`argmax_value` does not
+    exercise."""
+    x = a[0]
+    idx = 0
+    for i in range(1, LEN_1D):
+        if a[i] > x:
+            x = a[i]
+            idx = i
+    out_value[0] = x
+    out_index[0] = idx
+
+
+@dace.program
+def reroll_gather(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], ip: dace.int64[LEN_1D]):
+    """TSVC ``s353``: a saxpy hand-unrolled 7x whose source is an indirect
+    gather ``b[ip[i+k]]``. ``RerollUnrolledLoops`` collapses the seven
+    lanes to a unit-step loop; ``LoopToMap`` then needs the data-dependent
+    gather handled. The gather variant of :func:`reroll_saxpy7`. Requires
+    ``LEN_1D`` divisible by 7."""
+    for i in range(0, LEN_1D - 6, 7):
+        a[i] = a[i] + b[ip[i]] * 2.0
+        a[i + 1] = a[i + 1] + b[ip[i + 1]] * 2.0
+        a[i + 2] = a[i + 2] + b[ip[i + 2]] * 2.0
+        a[i + 3] = a[i + 3] + b[ip[i + 3]] * 2.0
+        a[i + 4] = a[i + 4] + b[ip[i + 4]] * 2.0
+        a[i + 5] = a[i + 5] + b[ip[i + 5]] * 2.0
+        a[i + 6] = a[i + 6] + b[ip[i + 6]] * 2.0
+
+
+@dace.program
+def thomas_solve(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D], d: dace.float64[LEN_1D],
+                 x: dace.float64[LEN_1D]):
+    """Tridiagonal Thomas algorithm: a forward elimination sweep followed
+    by a backward substitution sweep on the same axis -- two sequential
+    recurrences, the second descending and reading the first's results.
+    ``a`` / ``b`` / ``c`` are the sub / main / super diagonals (``c``,
+    ``d`` are overwritten as scratch), ``d`` the RHS, ``x`` the solution.
+    No single-direction scan covers the reverse second sweep."""
+    c[0] = c[0] / b[0]
+    d[0] = d[0] / b[0]
+    for i in range(1, LEN_1D):
+        m = b[i] - a[i] * c[i - 1]
+        c[i] = c[i] / m
+        d[i] = (d[i] - a[i] * d[i - 1]) / m
+    x[LEN_1D - 1] = d[LEN_1D - 1]
+    for i in range(LEN_1D - 2, -1, -1):
+        x[i] = d[i] - c[i] * x[i + 1]
+
+
+@dace.program
+def reduce_inner_carry(a: dace.float64[LEN_2D, LEN_2D], out: dace.float64[LEN_2D]):
+    """Outer loop is parallel over independent rows; the inner loop
+    carries a scalar reduction: ``out[i] = sum_j a[i, j]``. The outer
+    ``i`` lifts to a Map while the inner ``j`` stays a sequential
+    reduction (or a per-row ``Reduce``). Distinct from the flat
+    :func:`cond_reduce_sum` scalar accumulators."""
+    for i in range(LEN_2D):
+        s = 0.0
+        for j in range(LEN_2D):
+            s = s + a[i, j]
+        out[i] = s
+
+
+@dace.program
+def config_select_branch(out_a: dace.float64[LEN_1D], out_b: dace.float64[LEN_1D], src: dace.float64[LEN_1D]):
+    """Loop-invariant config flag ``K`` selects which output array each
+    iteration writes (incompatible writes to two distinct arrays):
+    ``if K > 0: out_a[i] = src[i]*2 else: out_b[i] = src[i]+1``.
+    ``MoveLoopInvariantIfUp`` hoists the ``K``-guard out of the loop,
+    splitting it into two clean parallel Maps. ``K`` is bound at call
+    time."""
+    for i in range(LEN_1D):
+        if K > 0:
+            out_a[i] = src[i] * 2.0
+        else:
+            out_b[i] = src[i] + 1.0
+
+
+@dace.program
+def move_if_data_dep_nest(out: dace.float64[LEN_2D, LEN_2D], src: dace.float64[LEN_2D, LEN_2D],
+                          cond: dace.float64[LEN_2D]):
+    """A DATA-DEPENDENT guard ``cond[i]`` sits in the MIDDLE of a 2D loop
+    nest, between the outer ``i`` loop and the inner ``j`` loop, gating the
+    whole inner sweep of row ``i``. As written the inner loop is
+    conditionally executed per row, so the nest cannot lift to a clean
+    parallel Map. Moving the ``if`` INTO the inner loop body
+    (``MoveIfIntoLoop``) rewrites it to ``for i: for j: if cond[i] > 0:``,
+    a single 2D parallel Map with a per-row data-dependent predicate -- on
+    GPU one parallel grid over ``(i, j)`` instead of a per-row branch that
+    serializes the inner sweep. Rows with ``cond[i] <= 0`` leave
+    ``out[i, :]`` untouched (caller pre-fills ``out``)."""
+    for i in range(LEN_2D):
+        if cond[i] > 0.0:
+            for j in range(LEN_2D):
+                out[i, j] = src[i, j] * 2.0
+
+
+@dace.program
+def fuse_move_ifs(a: dace.float64[LEN_2D, LEN_2D], b: dace.float64[LEN_2D, LEN_2D], src: dace.float64[LEN_2D, LEN_2D],
+                  cond: dace.float64[LEN_2D]):
+    """Follow-up to :func:`move_if_data_dep_nest`: two loop nests whose
+    guards block fusion. The first nest has a data-dependent guard
+    ``cond[i]`` in the middle (``for i: if cond[i] > 0: for j: ...``); the
+    second has a loop-invariant guard ``K`` wrapping the whole nest
+    (``if K > 0: for i: for j: ...``). Moving BOTH guards to the innermost
+    position rewrites each to the same ``for i: for j: if ...:`` shape,
+    after which the two nests -- now sharing one iteration space -- fuse
+    into a single ``for i: for j:`` carrying both predicated bodies: one
+    parallel Map / GPU grid instead of two. ``K`` is bound at call time;
+    rows/cells whose guard is false leave their output untouched (caller
+    pre-fills ``a`` and ``b``)."""
+    for i in range(LEN_2D):
+        if cond[i] > 0.0:
+            for j in range(LEN_2D):
+                a[i, j] = src[i, j] * 2.0
+    if K > 0:
+        for i in range(LEN_2D):
+            for j in range(LEN_2D):
+                b[i, j] = src[i, j] + 1.0
+
+
+# ==========================================================================
+#  %V  Transformation-test gap kernels (map fusion / loop-to-map / fission)
+# ==========================================================================
+#
+# Patterns drawn from the DaCe transformation tests: map fusion (vertical
+# producer-consumer + horizontal sibling), loop-to-map write-disjointness
+# certification (parallel vs sequential), a cloudsc-style conditional
+# gather, and loop fission through gather/scatter indirection.
+
+
+@dace.program
+def fuse_stencil_through_transient(out: dace.float64[LEN_1D], a: dace.float64[LEN_1D]):
+    """Non-pointwise vertical fusion (the offset-correction case). The
+    producer is a 3-point stencil ``tmp[i] = a[i-1] + a[i] + a[i+1]``; the
+    consumer reads the transient at an OFFSET: ``out[i] = tmp[i] * tmp[i+1]``.
+    Because the consumer needs ``tmp[i+1]``, the maps are not a 1:1 merge --
+    ``MapFusionVertical`` must apply offset correction (widen the producer
+    read window) before it can collapse them and drop ``tmp``. Interior
+    only; caller pre-fills the boundary cells of ``out``."""
+    tmp = np.empty(LEN_1D, dtype=np.float64)
+    for i in dace.map[1:LEN_1D - 1]:
+        tmp[i] = a[i - 1] + a[i] + a[i + 1]
+    for i in dace.map[1:LEN_1D - 2]:
+        out[i] = tmp[i] * tmp[i + 1]
+
+
+@dace.program
+def fuse_diamond(out: dace.float64[LEN_1D], a: dace.float64[LEN_1D]):
+    """Diamond producer-consumer fusion: one producer ``t = a*a`` feeds
+    TWO consumers (``u = t + 1``, ``v = t - 1``) whose results join in a
+    final map ``out = u * v``. The shared transient ``t`` is read by two
+    downstream maps, so the fuser must fuse the diamond without
+    duplicating the producer's work or serializing the two consumers --
+    harder than a linear producer-consumer chain. All three transients
+    (``t``, ``u``, ``v``) are eliminated when the diamond collapses to one
+    map."""
+    t = np.empty(LEN_1D, dtype=np.float64)
+    u = np.empty(LEN_1D, dtype=np.float64)
+    v = np.empty(LEN_1D, dtype=np.float64)
+    for i in dace.map[0:LEN_1D]:
+        t[i] = a[i] * a[i]
+    for i in dace.map[0:LEN_1D]:
+        u[i] = t[i] + 1.0
+    for i in dace.map[0:LEN_1D]:
+        v[i] = t[i] - 1.0
+    for i in dace.map[0:LEN_1D]:
+        out[i] = u[i] * v[i]
+
+
+@dace.program
+def loop_to_map_disjoint_strided(a: dace.float64[2 * LEN_1D], b: dace.float64[LEN_1D]):
+    """Two strided writes per iteration to disjoint slots ``a[2*i]`` and
+    ``a[2*i+1]``. A gcd-based disjointness proof (the two write index sets
+    never collide) lets ``LoopToMap`` parallelize despite the
+    two-writes-per-iteration shape."""
+    for i in range(LEN_1D):
+        a[2 * i] = b[i] + 1.0
+        a[2 * i + 1] = b[i] * 2.0
+
+
+@dace.program
+def loop_to_map_overlap_seq(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
+    """Counter-case to :func:`loop_to_map_disjoint_strided`: write index
+    sets ``5*i`` and ``3*i`` collide across iterations (``gcd(5, 3) = 1``),
+    so the loop carries a write-after-write conflict and ``LoopToMap`` must
+    refuse -- the result depends on sequential iteration order. Iterates to
+    ``LEN_1D // 5`` to keep both writes in range."""
+    for i in range(LEN_1D // 5):
+        a[5 * i] = b[i] + 1.0
+        a[3 * i] = b[i] * 2.0
+
+
+@dace.program
+def loop_to_map_threshold_gather(out: dace.float64[LEN_2D, LEN_2D], x: dace.float64[LEN_2D, LEN_2D],
+                                 y: dace.float64[LEN_2D, LEN_2D], w: dace.float64[LEN_2D, LEN_2D],
+                                 idx: dace.int64[LEN_2D]):
+    """cloudsc-style column physics: for each ``(i, k)`` a threshold on
+    GATHERED data ``w[idx[i], k]`` selects which elementwise update writes
+    ``out[i, k]``. Every ``(i, k)`` owns a distinct output cell, so
+    ``LoopToMap`` parallelizes the whole 2D nest even though the predicate
+    reads through the indirection ``idx``."""
+    for i in range(LEN_2D):
+        for k in range(LEN_2D):
+            if w[idx[i], k] > 0.5:
+                out[i, k] = x[i, k] * 2.0
+            else:
+                out[i, k] = y[i, k] + 1.0
+
+
+@dace.program
+def fission_gather_2body(b: dace.float64[LEN_1D], e: dace.float64[LEN_1D], a: dace.float64[LEN_1D],
+                         c: dace.float64[LEN_1D], idx: dace.int64[LEN_1D]):
+    """Two independent gathers sharing one index table: ``b[i] = a[idx[i]]``
+    and ``e[i] = c[idx[i]]``. The shared ``idx`` read normally blocks
+    ``MapFission``; the canonicalize path replicates the index read per
+    output so the two gather bodies fission into independent maps. The
+    indirect sibling of :func:`fission_indep_2body`."""
+    for i in dace.map[0:LEN_1D]:
+        b[i] = a[idx[i]]
+        e[i] = c[idx[i]]
+
+
+@dace.program
+def fission_scatter_2body(b: dace.float64[LEN_1D], e: dace.float64[LEN_1D], a: dace.float64[LEN_1D],
+                          c: dace.float64[LEN_1D], idx: dace.int64[LEN_1D]):
+    """Two independent scatters sharing a permutation index:
+    ``b[idx[i]] = a[i]*2`` and ``e[idx[i]] = c[i]+1``. Disjoint because
+    ``idx`` is a permutation, so after fission each scatter is its own
+    parallel map (guarded by the permutation proof)."""
+    for i in dace.map[0:LEN_1D]:
+        b[idx[i]] = a[i] * 2.0
+        e[idx[i]] = c[i] + 1.0
+
+
 __all__ = [
     "ext_strided_load_ssym",
     "ext_strided_load_2",
@@ -548,4 +1089,35 @@ __all__ = [
     "quasi_affine_pairwise_sum",
     "quasi_affine_mod_k_stripe",
     "quasi_affine_floor_div_scatter",
+    "wavefront2d",
+    "ext_break_find_first",
+    "ext_break_post_body",
+    "ext_break_capture",
+    "cond_reduce_sum",
+    "cond_reduce_sym",
+    "iv_additive",
+    "iv_multiplicative",
+    "argmax_value",
+    "argmin_value",
+    "neg_stride_rev",
+    "reroll_saxpy7",
+    "scan_strided_2",
+    "scan_strided_sym",
+    "scan_multi_carry",
+    "scan_conditional",
+    "scan_multi_5carry",
+    "argmax_with_index",
+    "reroll_gather",
+    "thomas_solve",
+    "reduce_inner_carry",
+    "config_select_branch",
+    "move_if_data_dep_nest",
+    "fuse_move_ifs",
+    "fuse_stencil_through_transient",
+    "fuse_diamond",
+    "loop_to_map_disjoint_strided",
+    "loop_to_map_overlap_seq",
+    "loop_to_map_threshold_gather",
+    "fission_gather_2body",
+    "fission_scatter_2body",
 ]

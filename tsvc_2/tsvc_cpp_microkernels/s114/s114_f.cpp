@@ -11,13 +11,13 @@ void s114_f(float *__restrict__ aa, const float *__restrict__ bb,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 200 * (iterations / (len_2d)); nl++) {
+    
       for (int i = 0; i < len_2d / vlen; i++) {
         for (int j = 0; j < i * vlen; j++) {
           aa[i * len_2d + j] = aa[j * len_2d + i] + bb[i * len_2d + j];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

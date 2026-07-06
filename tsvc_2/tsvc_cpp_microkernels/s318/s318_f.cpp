@@ -17,7 +17,7 @@ void s318_f(const float *__restrict__ a, float *__restrict__ result,
     int k, index;
     float maxv = 0.0f;
     float chksum = 0.0f;
-    for (int nl = 0; nl < iterations / 2; ++nl) {
+    
       k = 0;
       index = 0;
       maxv = std::fabs(a[0]);
@@ -32,7 +32,7 @@ void s318_f(const float *__restrict__ a, float *__restrict__ result,
       }
       chksum = maxv + static_cast<float>(index);
       result[0] = chksum;
-    }
+    
   }
   auto t2 = clock_highres::now();
 

@@ -13,14 +13,14 @@ void s2102_f(float *__restrict__ aa, int iterations, int len_2d,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 100 * (iterations / len_2d); nl++) {
+    
       for (int i = 0; i < len_2d; i++) {
         for (int j = 0; j < len_2d; j++) {
           aa[j * len_2d + i] = 0.0f;
         }
         aa[i * len_2d + i] = 1.0f;
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

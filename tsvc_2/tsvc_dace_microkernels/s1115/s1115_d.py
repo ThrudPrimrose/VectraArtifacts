@@ -11,8 +11,7 @@ def s1115_d(
     bb: dace.float64[LEN_2D, LEN_2D],
     cc: dace.float64[LEN_2D, LEN_2D],
 ):
-    for nl in range(100 * (ITERATIONS // LEN_2D)):
-        for i in range(LEN_2D):
-            for j in range(LEN_2D):
-                aa[i, j] = aa[i, j] * cc[j, i] + bb[i, j]
+    for i in range(LEN_2D):
+        for j in range(LEN_2D):
+            aa[i, j] = aa[i, j] * cc[j, i] + bb[i, j]
 

@@ -14,13 +14,13 @@ void s261_f(float *__restrict__ a, float *__restrict__ b,
   auto t1 = clock_highres::now();
 
   {
-    for (int nl = 0; nl < iterations; nl++) {
+    
       for (int i = 1; i < len_1d; i++) {
         float t = a[i] + b[i];
         a[i] = t + c[i - 1];
         c[i] = c[i] * d[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

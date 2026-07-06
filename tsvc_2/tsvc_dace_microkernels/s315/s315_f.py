@@ -9,13 +9,12 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s315_f(a: dace.float32[LEN_1D], result: dace.float32[1]):
     for i in range(LEN_1D):
         a[i] = float((i * 7) % LEN_1D)
-    for nl in range(ITERATIONS):
-        x = a[0]
-        index = 0
-        for i in range(LEN_1D):
-            if a[i] > x:
-                x = a[i]
-                index = i
-        a[0] = x + float(index)
+    x = a[0]
+    index = 0
+    for i in range(LEN_1D):
+        if a[i] > x:
+            x = a[i]
+            index = i
+    a[0] = x + float(index)
     result[0] = a[0]
 

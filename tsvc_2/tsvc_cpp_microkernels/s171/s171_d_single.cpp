@@ -14,9 +14,11 @@ void s171_d_single(double *__restrict__ a, const double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_1d; ++i) {
-      a[i * inc] += b[i];
-    }
+    
+      for (int i = 0; i < len_1d; ++i) {
+        a[i * inc] += b[i];
+      }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

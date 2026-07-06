@@ -15,11 +15,13 @@ void s222_f_single(float *__restrict__ a, float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 1; i < len_1d; ++i) {
-      a[i] += b[i] * c[i];
-      e[i] = e[i - 1] * e[i - 1];
-      a[i] -= b[i] * c[i];
-    }
+    
+      for (int i = 1; i < len_1d; ++i) {
+        a[i] += b[i] * c[i];
+        e[i] = e[i - 1] * e[i - 1];
+        a[i] -= b[i] * c[i];
+      }
+    
   }
 
   auto t2 = clock_highres::now();

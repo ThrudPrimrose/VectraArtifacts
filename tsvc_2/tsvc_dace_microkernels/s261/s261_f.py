@@ -12,9 +12,8 @@ def s261_f(
     c: dace.float32[LEN_1D],
     d: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(1, LEN_1D):
-            t = a[i] + b[i]
-            a[i] = t + c[i - 1]
-            c[i] = c[i] * d[i]
+    for i in range(1, LEN_1D):
+        t = a[i] + b[i]
+        a[i] = t + c[i - 1]
+        c[i] = c[i] * d[i]
 

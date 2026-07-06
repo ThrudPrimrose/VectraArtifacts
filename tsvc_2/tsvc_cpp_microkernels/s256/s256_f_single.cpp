@@ -14,12 +14,14 @@ void s256_f_single(float *__restrict__ a, float *__restrict__ aa,
   auto t1 = clock_highres::now();
 
   {
-    for (int i = 0; i < len_2d; i++) {
-      for (int j = 1; j < len_2d; j++) {
-        a[j] = 1.0f - a[j - 1];
-        aa[j * len_2d + i] = a[j] + bb[j * len_2d + i] * d[j];
+    
+      for (int i = 0; i < len_2d; i++) {
+        for (int j = 1; j < len_2d; j++) {
+          a[j] = 1.0f - a[j - 1];
+          aa[j * len_2d + i] = a[j] + bb[j * len_2d + i] * d[j];
+        }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

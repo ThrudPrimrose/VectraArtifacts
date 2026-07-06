@@ -9,7 +9,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s452_d(
     a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D]
 ):
-    for nl in range(4 * ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = b[i] + c[i] * (i + 1)
+    for i in range(LEN_1D):
+        a[i] = b[i] + c[i] * (i + 1)
 

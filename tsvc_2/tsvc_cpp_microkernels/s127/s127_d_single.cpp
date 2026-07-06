@@ -13,13 +13,15 @@ void s127_d_single(double *__restrict__ a, const double *__restrict__ b,
   auto t1 = clock_highres::now();
   {
     int j;
-    j = -1;
-    for (int i = 0; i < len_1d / 2; i++) {
-      j++;
-      a[j] = b[i] + c[i] * d[i];
-      j++;
-      a[j] = b[i] + d[i] * e[i];
-    }
+    
+      j = -1;
+      for (int i = 0; i < len_1d / 2; i++) {
+        j++;
+        a[j] = b[i] + c[i] * d[i];
+        j++;
+        a[j] = b[i] + d[i] * e[i];
+      }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

@@ -15,11 +15,11 @@ void s173_d(double *__restrict__ a, const double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 10 * iterations; ++nl) {
+    
       for (int i = 0; i < len_1d / 2; ++i) {
         a[i + k] = a[i] + b[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

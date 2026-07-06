@@ -13,12 +13,11 @@ def s123_d(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        j = -1
-        for i in range(LEN_1D // 2):
+    j = -1
+    for i in range(LEN_1D // 2):
+        j = j + 1
+        a[j] = b[i] + d[i] * e[i]
+        if c[i] > 0.0:
             j = j + 1
-            a[j] = b[i] + d[i] * e[i]
-            if c[i] > 0.0:
-                j = j + 1
-                a[j] = c[i] + d[i] * e[i]
+            a[j] = c[i] + d[i] * e[i]
 

@@ -21,15 +21,17 @@ void s315_f_single(float *__restrict__ a, float *__restrict__ result,
 
     float x;
     int index;
-    x = a[0];
-    index = 0;
-    for (int i = 0; i < len_1d; ++i) {
-      if (a[i] > x) {
-        x = a[i];
-        index = i;
+    
+      x = a[0];
+      index = 0;
+      for (int i = 0; i < len_1d; ++i) {
+        if (a[i] > x) {
+          x = a[i];
+          index = i;
+        }
       }
-    }
-    a[0] = x + static_cast<float>(index);
+      a[0] = x + static_cast<float>(index);
+    
     result[0] = a[0];
   }
   auto t2 = clock_highres::now();

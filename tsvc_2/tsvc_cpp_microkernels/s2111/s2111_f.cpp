@@ -13,7 +13,7 @@ void s2111_f(float *__restrict__ aa, int iterations, int len_2d,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 100 * (iterations / (len_2d)); nl++) {
+    
       for (int j = 1; j < len_2d; j++) {
         for (int i = 1; i < len_2d; i++) {
           float left = aa[j * len_2d + (i - 1)];
@@ -21,7 +21,7 @@ void s2111_f(float *__restrict__ aa, int iterations, int len_2d,
           aa[j * len_2d + i] = (left + upper) / 1.9f;
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
 

@@ -15,13 +15,15 @@ void s1161_f_single(float *__restrict__ a, float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_1d; ++i) {
-      if (c[i] < 0.0f) {
-        b[i] = a[i] + d[i] * d[i];
-      } else {
-        a[i] = c[i] + d[i] * e[i];
+    
+      for (int i = 0; i < len_1d; ++i) {
+        if (c[i] < 0.0f) {
+          b[i] = a[i] + d[i] * d[i];
+        } else {
+          a[i] = c[i] + d[i] * e[i];
+        }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

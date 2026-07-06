@@ -9,9 +9,8 @@ ITERATIONS = dace.symbol("ITERATIONS")
 def s482_d(
     a: dace.float64[LEN_1D], b: dace.float64[LEN_1D], c: dace.float64[LEN_1D]
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = a[i] + b[i] * c[i]
-            if c[i] > b[i]:
-                break
+    for i in range(LEN_1D):
+        a[i] = a[i] + b[i] * c[i]
+        if c[i] > b[i]:
+            break
 

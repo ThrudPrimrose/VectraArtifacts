@@ -13,10 +13,12 @@ void s4113_f_single(float *__restrict__ a, const float *__restrict__ b,
                      int iterations, int len_1d, std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int i = 0; i < len_1d; ++i) {
-    int idx = ip[i];
-    a[idx] = b[idx] + c[i];
-  }
+  
+    for (int i = 0; i < len_1d; ++i) {
+      int idx = ip[i];
+      a[idx] = b[idx] + c[i];
+    }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

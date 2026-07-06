@@ -15,14 +15,16 @@ void s253_f_single(float *__restrict__ a, float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    float s = 0.0f;
-    for (int i = 0; i < len_1d; ++i) {
-      if (a[i] > b[i]) {
-        s = a[i] - b[i] * d[i];
-        c[i] += s;
-        a[i] = s;
+    
+      float s = 0.0f;
+      for (int i = 0; i < len_1d; ++i) {
+        if (a[i] > b[i]) {
+          s = a[i] - b[i] * d[i];
+          c[i] += s;
+          a[i] = s;
+        }
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

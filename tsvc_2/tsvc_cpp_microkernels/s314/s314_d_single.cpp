@@ -15,12 +15,14 @@ void s314_d_single(const double *__restrict__ a, double *__restrict__ result,
   auto t1 = clock_highres::now();
   {
     double x;
-    x = a[0];
-    for (int i = 0; i < len_1d; ++i) {
-      if (a[i] > x) {
-        x = a[i];
+    
+      x = a[0];
+      for (int i = 0; i < len_1d; ++i) {
+        if (a[i] > x) {
+          x = a[i];
+        }
       }
-    }
+    
     result[0] = x;
   }
   auto t2 = clock_highres::now();

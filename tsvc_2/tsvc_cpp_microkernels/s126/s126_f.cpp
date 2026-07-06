@@ -13,7 +13,7 @@ void s126_f(float *__restrict__ bb, const float *__restrict__ cc,
   auto t1 = clock_highres::now();
   {
     int k;
-    for (int nl = 0; nl < 10 * (iterations / len_2d); nl++) {
+    
       k = 1;
       for (int i = 0; i < len_2d; i++) {
         for (int j = 1; j < len_2d; j++) {
@@ -23,7 +23,7 @@ void s126_f(float *__restrict__ bb, const float *__restrict__ cc,
         }
         ++k;
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   std::int64_t ns =

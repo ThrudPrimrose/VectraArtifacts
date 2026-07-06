@@ -13,9 +13,8 @@ def s1279_d(
     d: dace.float64[LEN_1D],
     e: dace.float64[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if a[i] < 0.0:
-                if b[i] > a[i]:
-                    c[i] = c[i] + d[i] * e[i]
+    for i in range(LEN_1D):
+        if a[i] < 0.0:
+            if b[i] > a[i]:
+                c[i] = c[i] + d[i] * e[i]
 

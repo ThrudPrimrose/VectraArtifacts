@@ -14,9 +14,8 @@ def s272_f(
     e: dace.float32[LEN_1D],
     threshold: dace.int64,
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if e[i] >= threshold:
-                a[i] = a[i] + c[i] * d[i]
-                b[i] = b[i] + c[i] * c[i]
+    for i in range(LEN_1D):
+        if e[i] >= threshold:
+            a[i] = a[i] + c[i] * d[i]
+            b[i] = b[i] + c[i] * c[i]
 

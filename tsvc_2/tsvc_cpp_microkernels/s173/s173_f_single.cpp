@@ -15,9 +15,11 @@ void s173_f_single(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int i = 0; i < len_1d / 2; ++i) {
-      a[i + k] = a[i] + b[i];
-    }
+    
+      for (int i = 0; i < len_1d / 2; ++i) {
+        a[i + k] = a[i] + b[i];
+      }
+    
   }
 
   auto t2 = clock_highres::now();

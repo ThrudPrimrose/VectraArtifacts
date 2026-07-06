@@ -14,11 +14,11 @@ void s174_f(float *__restrict__ a, const float *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < 10 * iterations; ++nl) {
+    
       for (int i = 0; i < M; ++i) {
         a[i + M] = a[i] + b[i];
       }
-    }
+    
   }
 
   auto t2 = clock_highres::now();

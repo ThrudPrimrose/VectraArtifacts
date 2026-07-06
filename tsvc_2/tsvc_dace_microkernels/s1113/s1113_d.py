@@ -7,7 +7,6 @@ ITERATIONS = dace.symbol("ITERATIONS")
 
 @dace.program
 def s1113_d(a: dace.float64[LEN_1D], b: dace.float64[LEN_1D]):
-    for nl in range(2 * ITERATIONS):
-        for i in range(LEN_1D):
-            a[i] = a[LEN_1D // 2] + b[i]
+    for i in range(LEN_1D):
+        a[i] = a[LEN_1D // 2] + b[i]
 

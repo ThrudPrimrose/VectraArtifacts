@@ -12,10 +12,9 @@ def s253_f(
     c: dace.float32[LEN_1D],
     d: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if a[i] > b[i]:
-                s = a[i] - b[i] * d[i]
-                c[i] = c[i] + s
-                a[i] = s
+    for i in range(LEN_1D):
+        if a[i] > b[i]:
+            s = a[i] - b[i] * d[i]
+            c[i] = c[i] + s
+            a[i] = s
 

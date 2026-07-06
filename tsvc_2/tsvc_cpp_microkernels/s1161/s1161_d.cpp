@@ -15,7 +15,7 @@ void s1161_d(double *__restrict__ a, double *__restrict__ b,
 
   auto t1 = clock_highres::now();
   {
-    for (int nl = 0; nl < iterations; ++nl) {
+    
       for (int i = 0; i < len_1d; ++i) {
         if (c[i] < 0.0) {
           b[i] = a[i] + d[i] * d[i];
@@ -23,7 +23,7 @@ void s1161_d(double *__restrict__ a, double *__restrict__ b,
           a[i] = c[i] + d[i] * e[i];
         }
       }
-    }
+    
   }
   auto t2 = clock_highres::now();
   time_ns[0] =

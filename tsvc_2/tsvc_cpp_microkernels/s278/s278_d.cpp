@@ -12,7 +12,7 @@ void s278_d(double *__restrict__ a, double *__restrict__ b,
                     std::int64_t * __restrict__ time_ns) {
   auto t1 = clock_highres::now();
 
-  for (int nl = 0; nl < iterations; ++nl) {
+  
     for (int i = 0; i < len_1d; ++i) {
       if (a[i] > 0.0) {
         c[i] = -c[i] + d[i] * e[i];
@@ -21,7 +21,7 @@ void s278_d(double *__restrict__ a, double *__restrict__ b,
       }
       a[i] = b[i] + c[i] * d[i];
     }
-  }
+  
 
   auto t2 = clock_highres::now();
   time_ns[0] =

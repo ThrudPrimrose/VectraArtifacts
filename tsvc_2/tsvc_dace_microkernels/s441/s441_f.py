@@ -12,12 +12,11 @@ def s441_f(
     c: dace.float32[LEN_1D],
     d: dace.float32[LEN_1D],
 ):
-    for nl in range(ITERATIONS):
-        for i in range(LEN_1D):
-            if d[i] < 0.0:
-                a[i] = a[i] + b[i] * c[i]
-            elif d[i] == 0.0:
-                a[i] = a[i] + b[i] * b[i]
-            else:
-                a[i] = a[i] + c[i] * c[i]
+    for i in range(LEN_1D):
+        if d[i] < 0.0:
+            a[i] = a[i] + b[i] * c[i]
+        elif d[i] == 0.0:
+            a[i] = a[i] + b[i] * b[i]
+        else:
+            a[i] = a[i] + c[i] * c[i]
 
