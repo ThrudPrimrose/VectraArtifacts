@@ -19,12 +19,32 @@ python3 only_timing.py \
     --precision both \
     --reps 200
 
+python3 only_timing.py \
+    --compilers clang gcc \
+    --tsvc-version tsvc_2 \
+    --cost-models default cheap unlimited disabled \
+    --cpus apple_m_series \
+    --precision both \
+    --reps 200
+    --force-dace
+
 # tsvc_2_5 layout
 python3 only_timing.py \
     --tsvc-version tsvc_2_5 \
     --compilers clang \
     --cost-models unlimited \
     --cpus apple_m_series
+
+# tsvc_2_5, DaCe only, first run after Timer instrumentation was added
+python3 only_timing.py \
+    --tsvc-version tsvc_2_5 \
+    --compilers clang gcc \
+    --cost-models cheap default \
+    --cpus apple_m_series \
+    --precision double \
+    --reps 30 \
+    --no-cpp \
+    --force-dace
 """
 
 from __future__ import annotations
@@ -130,8 +150,8 @@ def _read_vec_report(vec_report_path: pathlib.Path) -> dict[str, str]:
     for line in vec_report_path.read_text(errors="ignore").splitlines():
         line = line.strip()
         if line.startswith("[VEC]") or line.startswith("[---]"):
-            tag  = line[:5]
-            rest = line[5:].strip().split()[0]          # kernel name is first token
+            tag    = line[:5]
+            rest   = line[5:].strip().split()[0]
             kernel = rest.rstrip("_").lstrip()
             result[kernel] = "VEC" if tag == "[VEC]" else "---"
     return result
@@ -165,7 +185,7 @@ def _time_cpp_cell(
     len_1d: int,
     kernel_timeout: int,
     env: dict,
-) -> pathlib.Path | None:
+) -> "pathlib.Path | None":
     """
     Invoke compile_cpp_kernels --time (no --force) against the pre-compiled
     build dir and write timing_report.csv into cell_dir.
@@ -211,10 +231,17 @@ def _time_dace_cell(
     len_1d: int,
     kernel_timeout: int,
     env: dict,
-) -> pathlib.Path | None:
+    force: bool = False,
+) -> "pathlib.Path | None":
     """
-    Invoke compile_dace_kernels --time (no --force) against the pre-compiled
-    build dir and write timing_report.csv into cell_dir.
+    Invoke compile_dace_kernels --time against the pre-compiled build dir
+    and write timing_report.csv into cell_dir.
+
+    Pass force=True (via --force-dace CLI flag) the first time after
+    Timer instrumentation was added to compile_dace.py — this triggers a
+    recompile so the new std::chrono hooks are baked into the .so.
+    Subsequent runs can omit --force-dace and use the cached instrumented build.
+
     Returns the CSV path on success, None on failure.
     """
     build_dir  = cell_dir / "build"
@@ -227,15 +254,17 @@ def _time_dace_cell(
     cmd = [
         "python3", "-m", f"{tsvc_module}.compile_dace_kernels",
         dace_kernels,
-        "-b",              str(build_dir),
-        "--pattern",       pattern,
+        "-b",               str(build_dir),
+        "--pattern",        pattern,
         "--time",
-        "--reps",          str(reps),
-        "--len-1d",        str(len_1d),
-        "--timing-out",    str(timing_out),
+        "--reps",           str(reps),
+        "--len-1d",         str(len_1d),
+        "--timing-out",     str(timing_out),
         "--kernel-timeout", str(kernel_timeout),
-        # no --force: reuse the pre-compiled .sdfgz + .so
     ]
+
+    if force:
+        cmd.append("--force")
 
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     (cell_dir / "timing_stdout.txt").write_text(result.stdout)
@@ -254,7 +283,7 @@ def parse_args(argv=None):
         description="Time pre-compiled CPP + DaCe TSVC kernels (no recompilation).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
-Must be run after run_compile_sweep.py with matching arguments.
+Must be run after only_vec.py with matching arguments.
 
 valid compilers   : {", ".join(ALL_COMPILERS)}
 valid cost-models : {", ".join(ALL_COST_MODELS)}
@@ -304,6 +333,14 @@ valid precisions  : {", ".join(ALL_PRECISIONS)}
                     help="Per-kernel timeout in seconds for DaCe (default: 120).")
     ap.add_argument("--no-cpp",  action="store_true", help="Skip CPP timing.")
     ap.add_argument("--no-dace", action="store_true", help="Skip DaCe timing.")
+    ap.add_argument(
+        "--force-dace", action="store_true",
+        help=(
+            "Force DaCe kernel recompile before timing. Use this the first time "
+            "after Timer instrumentation was added to compile_dace.py so the "
+            "cached .so files are rebuilt with std::chrono hooks injected."
+        ),
+    )
     return ap.parse_args(argv)
 
 
@@ -340,6 +377,7 @@ def main(argv=None):
     print(f"Reps          : {args.reps}  |  len_1d={args.len_1d}  |  kernel_timeout={args.kernel_timeout}s")
     print(f"Cells         : {total}")
     print(f"Skip CPP      : {args.no_cpp}  |  Skip DaCe: {args.no_dace}")
+    print(f"Force DaCe    : {args.force_dace}")
 
     scripts_dir = pathlib.Path("scripts")
     idx = 0
@@ -355,10 +393,8 @@ def main(argv=None):
             idx += 1
             print(f"\n=== [{idx}/{total}] [{precision}] {name} ===")
 
-            # Source environment (script must exist from compile step)
             script_path = scripts_dir / f"source.{name}.sh"
             if not script_path.exists():
-                # Regenerate if missing (e.g. scripts/ was cleaned)
                 subprocess.run([
                     "vectra-source-sh",
                     "--compiler",   compiler,
@@ -408,6 +444,7 @@ def main(argv=None):
                         len_1d=args.len_1d,
                         kernel_timeout=args.kernel_timeout,
                         env=env,
+                        force=args.force_dace,  # ← fixed: was undefined `force`
                     )
                     elapsed = _time.perf_counter() - t0
                     if out:

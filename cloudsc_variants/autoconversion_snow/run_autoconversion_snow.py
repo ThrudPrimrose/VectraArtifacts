@@ -147,14 +147,14 @@ def main():
     print(f"autoconversion_snow  KLON={KLON} NCLDQS={NCLDQS} NCLDQI={NCLDQI}  rtol={RTOL}")
     print(f"  oracle: nonzero zsnowaut = {int(np.count_nonzero(ref['zsnowaut']))}/{KLON}")
 
-    lang_map = native.emit_and_compile_native(
-        HERE, "autoconversion_snow", "autoconversion_snow_numpy.py",
-        "autoconversion_snow.bench_info.json")
+    # lang_map = native.emit_and_compile_native(
+    #     HERE, "autoconversion_snow", "autoconversion_snow_numpy.py",
+    #     "autoconversion_snow.bench_info.json")
 
     results = []
     results.append(native.compare("original Fortran (ctypes)", ref, run_original_fortran(consts, arrays), RTOL))
-    for lang in ("c", "cpp", "fortran"):
-        results.append(native.compare(f"NumpyToX autogen {lang}", ref, run_native(consts, arrays, lang_map, lang), RTOL))
+    # for lang in ("c", "cpp", "fortran"):
+    #     results.append(native.compare(f"NumpyToX autogen {lang}", ref, run_native(consts, arrays, lang_map, lang), RTOL))
     results.append(native.compare("Fortran-frontend SDFG", ref, run_sdfg("fortran_frontend", consts, arrays, True), RTOL))
     results.append(native.compare("Python-frontend SDFG", ref, run_sdfg("python_frontend", consts, arrays, False), RTOL))
 

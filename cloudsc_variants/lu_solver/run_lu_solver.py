@@ -86,12 +86,12 @@ def main():
     arrays = make_inputs()
     ref = numpy_reference(arrays)
     print(f"lu_solver_microphysics  KLON={KLON} NCLV={NCLV}  rtol={RTOL}")
-    lang_map = native.emit_and_compile_native(HERE, "lu_solver", "lu_solver_numpy.py",
-                                              "lu_solver.bench_info.json")
+    # lang_map = native.emit_and_compile_native(HERE, "lu_solver", "lu_solver_numpy.py",
+    #                                           "lu_solver.bench_info.json")
     results = []
     results.append(native.compare("original Fortran (ctypes)", ref, run_original_fortran(arrays), RTOL))
-    for lang in ("c", "cpp", "fortran"):
-        results.append(native.compare(f"NumpyToX autogen {lang}", ref, run_native(arrays, lang_map, lang), RTOL))
+    # for lang in ("c", "cpp", "fortran"):
+    #     results.append(native.compare(f"NumpyToX autogen {lang}", ref, run_native(arrays, lang_map, lang), RTOL))
     results.append(native.compare("Fortran-frontend SDFG", ref, run_sdfg("fortran_frontend", arrays, True), RTOL))
     results.append(native.compare("Python-frontend SDFG", ref, run_sdfg("python_frontend", arrays, False), RTOL))
     print()

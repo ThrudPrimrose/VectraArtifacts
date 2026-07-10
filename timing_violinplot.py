@@ -88,77 +88,61 @@ def _strip_precision_suffix(name: str) -> str:
 
 
 # ── CSV discovery ──────────────────────────────────────────────────────────────
+# ── CSV discovery ──────────────────────────────────────────────────────────────
 def _discover_csvs(root: pathlib.Path, backend_tag: str) -> pd.DataFrame:
     """
-    Walk root recursively for timing_report.csv files.
-
-    Expected relative path from root:
-      <precision>/<compiler>_<cpu>_<cost_model>/timing_report.csv   (3 parts)
-
-    The <precision> folder name ("float" or "double") is used as the
-    canonical precision label — NOT the _f/_d suffix in kernel names.
+    Walk root for *_raw_timings.csv files (one row per rep per kernel).
+    Falls back to timing_report.csv + synthetic distribution if no raw file found.
     """
     rows = []
-    for csv_path in sorted(root.rglob("timing_report.csv")):
-        parts = csv_path.relative_to(root).parts  # e.g. ("float", "clang_apple_m_series_cheap", "timing_report.csv")
+    for raw_path in sorted(root.rglob("*_raw_timings.csv")):
+        parts = raw_path.relative_to(root).parts
 
         if len(parts) == 3:
             precision, combo = parts[0], parts[1]
         elif len(parts) == 2:
             precision, combo = "unknown", parts[0]
         else:
-            # Unexpected depth — skip
             continue
 
-        # Only accept float / double precision folders
         if precision not in ("float", "double"):
             continue
 
         try:
-            df = pd.read_csv(csv_path)
+            df = pd.read_csv(raw_path)
         except Exception as exc:
-            print(f"[warn] could not read {csv_path}: {exc}", file=sys.stderr)
+            print(f"[warn] could not read {raw_path}: {exc}", file=sys.stderr)
             continue
 
         df.columns = [c.strip() for c in df.columns]
 
-        # Convert ns → µs if needed
-        if "median_ns" in df.columns:
-            df = df.rename(columns={
-                "median_ns": "median_us",
-                "min_ns":    "min_us",
-                "stdev_ns":  "stdev_us",
-            })
-            df["median_us"] /= 1_000
-            df["min_us"]    /= 1_000
-            df["stdev_us"]  /= 1_000
-
-        required = {"kernel", "median_us", "min_us", "stdev_us"}
-        if not required.issubset(df.columns):
-            print(f"[warn] missing columns in {csv_path}, skipping", file=sys.stderr)
+        # CPP raw: columns are kernel, rep, timing_ns  → convert to µs
+        # DaCe raw: columns are kernel, rep, timing_us → already µs
+        if "timing_ns" in df.columns:
+            df = df.rename(columns={"timing_ns": "timing_us"})
+            df["timing_us"] = df["timing_us"] / 1_000
+        elif "timing_us" not in df.columns:
+            print(f"[warn] no timing_ns or timing_us column in {raw_path}, skipping", file=sys.stderr)
             continue
 
-        # Drop zero-time rows (un-executed kernels)
-        df = df[df["median_us"] > 0].copy()
+        # Drop zero/negative rows
+        df = df[df["timing_us"] > 0].copy()
         if df.empty:
             continue
 
-        # Normalise kernel names: strip _f / _d suffix so float & double
-        # variants share the same base name. Precision comes from the folder.
-        df["kernel"] = df["kernel"].apply(_strip_precision_suffix)
-
+        df["kernel"]    = df["kernel"].apply(_strip_precision_suffix)
         df["precision"] = precision
         df["combo"]     = combo
         df["backend"]   = backend_tag
 
-        rows.append(df[["kernel", "median_us", "min_us", "stdev_us",
-                         "precision", "combo", "backend"]])
+        rows.append(df[["kernel", "rep", "timing_us", "precision", "combo", "backend"]])
 
     if not rows:
+        print(f"  [{backend_tag}] no raw timing CSVs found under {root}", file=sys.stderr)
         return pd.DataFrame()
 
     result = pd.concat(rows, ignore_index=True)
-    print(f"  [{backend_tag}] found {len(result)} rows across "
+    print(f"  [{backend_tag}] found {len(result)} raw timing rows across "
           f"{result['precision'].nunique()} precision(s), "
           f"{result['combo'].nunique()} config(s), "
           f"{result['kernel'].nunique()} kernel(s)")
@@ -192,29 +176,21 @@ def plot_kernel_precision(
     if sub.empty:
         return None
 
-    # Verify at least one backend is present
-    backends_present = sub["backend"].unique()
-    if len(backends_present) == 0:
-        return None
-
-    # ── X-axis ordering: clang before gcc, cost models in fixed order ──────────
     cost_order = {"cheap": 0, "default": 1, "disabled": 2, "unlimited": 3}
 
     def _sort_key(combo: str) -> tuple:
         tok = combo.split("_")
-        compiler = tok[0]        # clang / gcc
-        cost     = tok[-1]       # cheap / default / disabled / unlimited
+        compiler = tok[0]
+        cost     = tok[-1]
         return (compiler, cost_order.get(cost, 99))
 
     x_categories = sorted(sub["combo"].unique(), key=_sort_key)
 
-    # Determine display unit from overall max
-    med_max = sub["median_us"].max()
+    med_max = sub["timing_us"].max()
     scale, unit = (1_000, "ms") if med_max >= 1_000 else (1, "µs")
 
     fig = go.Figure()
 
-    # ── Two traces per graph: CPP (blue) and DaCe (orange) ────────────────────
     for backend in ("cpp", "dace"):
         b_sub = sub[sub["backend"] == backend]
         if b_sub.empty:
@@ -222,15 +198,9 @@ def plot_kernel_precision(
 
         color = _BACKEND_COLOR[backend]
 
-        x_vals, y_vals = [], []
-        for x_cat in x_categories:
-            for _, row in b_sub[b_sub["combo"] == x_cat].iterrows():
-                pts = _synth_y(row)
-                x_vals.extend([x_cat] * len(pts))
-                y_vals.extend([v / scale for v in pts])
-
-        if not x_vals:
-            continue
+        # Build parallel x/y lists — one entry per raw timing measurement
+        x_vals = b_sub["combo"].tolist()
+        y_vals = (b_sub["timing_us"] / scale).tolist()
 
         fig.add_trace(go.Violin(
             x=x_vals,
@@ -242,7 +212,7 @@ def plot_kernel_precision(
             points=False,
             box_visible=True,
             meanline_visible=True,
-            offsetgroup=backend,   # side-by-side within each x-category
+            offsetgroup=backend,
         ))
 
     fig.update_layout(

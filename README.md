@@ -160,6 +160,10 @@ specifically for me: conda activate thesis
 deactivate vevn
 conda deactivate
 
+CSCS
+ssh -A abonsall@ela.cscs.sh
+ssh daint
+
 ```bash
 vectra-source-sh --compiler {clang, gcc, icpx} --cost-model {default, cheap, unlimited, disabled} --cpu apple_m_series \
                  --out scripts/source.{name}.sh
