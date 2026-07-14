@@ -5,6 +5,13 @@ compiler / cost-model / CPU combinations and generate vectorisation reports.
 
 Timing is intentionally separated — run run_timing_sweep.py after this.
 
+Sharding
+--------
+When launched via `srun` with multiple tasks, each task automatically picks
+up SLURM_PROCID / SLURM_NTASKS and only processes its slice of the full
+(precision, compiler, cost-model, cpu) run matrix. You can also override
+manually with --shard-id / --num-shards for local testing.
+
 Examples
 --------
 # Single cell (equivalent to the hardcoded original)
@@ -15,6 +22,12 @@ python3 only_vec.py --compilers clang gcc --cost-models default cheap unlimited 
 
 # tsvc_2_5 layout
 python3 only_vec.py --tsvc-version tsvc_2_5 --compilers clang --cost-models unlimited --cpus apple_m_series
+
+# Manual shard override (e.g. local testing of shard 2 of 4)
+python3 only_vec.py --compilers clang gcc --cost-models default cheap unlimited disabled --cpus arm_grace --shard-id 2 --num-shards 4
+
+# Cluster usage (each srun task auto-detects its shard from SLURM env vars)
+srun python3 only_vec.py --compilers clang gcc --cost-models default cheap unlimited disabled --cpus arm_grace -j ${SLURM_CPUS_PER_TASK}
 """
 
 from __future__ import annotations
@@ -36,6 +49,7 @@ ALL_CPUS        = (
 )
 ALL_PRECISIONS  = ("double", "float", "both")
 
+
 # ── Per-version config ─────────────────────────────────────────────────────────
 TSVC_VERSION_CONFIG = {
     "tsvc_2": {
@@ -50,6 +64,7 @@ TSVC_VERSION_CONFIG = {
     },
 }
 
+
 # ── Precision glob patterns ────────────────────────────────────────────────────
 _PRECISION_PATTERNS: dict = {
     ("double", "tsvc_2"):   ("*_d_single.cpp", "*_d_single.py"),
@@ -58,9 +73,8 @@ _PRECISION_PATTERNS: dict = {
     ("float",  "tsvc_2_5"): ("*_f.cpp",        "*_f.py"),
 }
 
+
 # ── Cost-model optimisation flags ─────────────────────────────────────────────
-# Injected into CXXFLAGS so compile_dace.py's _extra_flags_from_env() forwards
-# them when regenerating per-kernel .rpt files.
 _COST_MODEL_CXXFLAGS = {
     "default":   "-O2",
     "cheap":     "-O1",
@@ -73,6 +87,7 @@ _COST_MODEL_CXXFLAGS_GCC = {
     "unlimited": "-O3 -ffast-math -march=native",
     "disabled":  "-O0 -fno-tree-vectorize",
 }
+
 
 # ── Vectorisation remark flags ─────────────────────────────────────────────────
 _VEC_REMARK_FLAGS = {
@@ -131,6 +146,28 @@ def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
     return env
 
 
+def _resolve_shard(args) -> tuple[int, int]:
+    """
+    Resolve (shard_id, num_shards).
+
+    Priority: explicit CLI flags > SLURM env vars > single-shard default.
+    """
+    shard_id = args.shard_id
+    num_shards = args.num_shards
+
+    if shard_id is None:
+        shard_id = int(os.environ.get("SLURM_PROCID", 0))
+    if num_shards is None:
+        num_shards = int(os.environ.get("SLURM_NTASKS", 1))
+
+    if num_shards < 1:
+        raise ValueError(f"--num-shards must be >= 1, got {num_shards}")
+    if not (0 <= shard_id < num_shards):
+        raise ValueError(f"--shard-id {shard_id} out of range for --num-shards {num_shards}")
+
+    return shard_id, num_shards
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
@@ -180,6 +217,14 @@ valid precisions  : {", ".join(ALL_PRECISIONS)}
                     help="Parallel compile jobs (default: 6).")
     ap.add_argument("--no-cpp",  action="store_true", help="Skip C++ compilation.")
     ap.add_argument("--no-dace", action="store_true", help="Skip DaCe compilation.")
+    ap.add_argument(
+        "--shard-id", type=int, default=None, metavar="N",
+        help="0-indexed shard this process handles. Defaults to $SLURM_PROCID if unset.",
+    )
+    ap.add_argument(
+        "--num-shards", type=int, default=None, metavar="K",
+        help="Total number of shards. Defaults to $SLURM_NTASKS if unset (i.e. 1 = no sharding).",
+    )
     return ap.parse_args(argv)
 
 
@@ -204,7 +249,11 @@ def compile_cell(
     scripts_dir.mkdir(exist_ok=True)
     script_path = scripts_dir / f"source.{name}.sh"
 
-    # Generate the environment script if it doesn't exist yet
+    # Generate the environment script if it doesn't exist yet.
+    # NOTE: with multiple shards writing concurrently, different shards may
+    # need *different* cells, so this is naturally race-free as long as no
+    # two shards are ever assigned the same cell (guaranteed by the
+    # strided slicing in main()).
     if not script_path.exists():
         subprocess.run([
             "vectra-source-sh",
@@ -285,13 +334,23 @@ def main(argv=None):
 
     precisions = ["double", "float"] if args.precision == "both" else [args.precision]
 
-    # Build the list of cells up front so we can print a summary
+    # Build the FULL list of cells (compiler x cost-model x cpu)
     cells = [
         (f"{compiler}_{cpu}_{cost_model}", compiler, cost_model, cpu)
         for compiler   in args.compilers
         for cost_model in args.cost_models
         for cpu        in args.cpus
     ]
+
+    # Flatten precision x cells into one master run list, then shard it.
+    all_runs = [
+        (precision, name, compiler, cost_model, cpu)
+        for precision in precisions
+        for (name, compiler, cost_model, cpu) in cells
+    ]
+
+    shard_id, num_shards = _resolve_shard(args)
+    my_runs = all_runs[shard_id::num_shards]
 
     print(f"TSVC version : {args.tsvc_version}  (module: {tsvc_module})")
     print(f"CPP kernels  : {cpp_kernels}")
@@ -300,34 +359,31 @@ def main(argv=None):
     print(f"Cost models  : {args.cost_models}")
     print(f"CPUs         : {args.cpus}")
     print(f"Precisions   : {precisions}")
-    print(f"Cells        : {len(cells)} x {len(precisions)} precision(s) = {len(cells)*len(precisions)} runs")
+    print(f"Total runs   : {len(all_runs)}")
+    print(f"Shard        : {shard_id} / {num_shards}  ->  {len(my_runs)} run(s) assigned to this process")
     print(f"Skip CPP     : {args.no_cpp}")
     print(f"Skip DaCe    : {args.no_dace}")
 
-    total = len(cells) * len(precisions)
-    idx   = 0
-    for precision in precisions:
-        for name, compiler, cost_model, cpu in cells:
-            idx += 1
-            print(f"\n=== [{idx}/{total}] [{precision}] {name} ===")
-            compile_cell(
-                name=name,
-                compiler=compiler,
-                cost_model=cost_model,
-                cpu=cpu,
-                precision=precision,
-                tsvc_version=args.tsvc_version,
-                tsvc_module=tsvc_module,
-                cpp_kernels=cpp_kernels,
-                dace_kernels=dace_kernels,
-                base_cpp=base_cpp,
-                base_dace=base_dace,
-                jobs=args.jobs,
-                skip_cpp=args.no_cpp,
-                skip_dace=args.no_dace,
-            )
+    for idx, (precision, name, compiler, cost_model, cpu) in enumerate(my_runs, 1):
+        print(f"\\n=== [shard {shard_id}/{num_shards}] [{idx}/{len(my_runs)}] [{precision}] {name} ===")
+        compile_cell(
+            name=name,
+            compiler=compiler,
+            cost_model=cost_model,
+            cpu=cpu,
+            precision=precision,
+            tsvc_version=args.tsvc_version,
+            tsvc_module=tsvc_module,
+            cpp_kernels=cpp_kernels,
+            dace_kernels=dace_kernels,
+            base_cpp=base_cpp,
+            base_dace=base_dace,
+            jobs=args.jobs,
+            skip_cpp=args.no_cpp,
+            skip_dace=args.no_dace,
+        )
 
-    print(f"\nDone. {idx} cell(s) compiled.")
+    print(f"\\nDone. Shard {shard_id}/{num_shards} compiled {len(my_runs)} cell(s).")
 
 
 if __name__ == "__main__":
