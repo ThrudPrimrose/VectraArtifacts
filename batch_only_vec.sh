@@ -10,4 +10,5 @@
 #SBATCH --output=perf_%j.out
 #SBATCH --error=perf_%j.err
 
+source ~/VectraArtifacts/venv/bin/activate
 srun python only_vec.py --compilers gcc --cost-models default cheap unlimited disabled --precision both --tsvc-version tsvc_2 --cpus arm_grace -j ${SLURM_CPUS_PER_TASK}

@@ -29,9 +29,9 @@ _BASE_MODEL_CLANG_DISABLED = "-O0 -march=native -fno-math-errno -fno-trapping-ma
 
 _COST_MODEL_CXXFLAGS = {
     "disabled":  "-fno-vectorize -fno-slp-vectorize",
-    "cheap":     "-fvectorize -mllvm -vectorizer-min-trip-count=64",
+    # "cheap":     "-fvectorize -mllvm -vectorizer-min-trip-count=64",
     "default":   "-fvectorize",
-    "unlimited": "-Rpass-analysis=loop-vectorize -mllvm -force-vector-width=4",
+    "unlimited": "-Rpass-analysis=loop-vectorize",
 }
 _COST_MODEL_CXXFLAGS_GCC = {
     "disabled":  "-fno-tree-vectorize",
@@ -445,6 +445,10 @@ def main(argv: Iterable[str] | None = None) -> int:
 
         for compiler in args.compilers:
             for cost_model in args.cost_models:
+                if compiler == "clang":
+                    if cost_model == "cheap":
+                        #There is no clang equivalent for cheap
+                        continue
                 for cpu in args.cpus:
                     cell = f"{compiler}_{cpu}_{cost_model}"
                     print(f"[{bench_name}] {cell} :: {sdfg_path.name}")

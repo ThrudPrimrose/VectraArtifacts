@@ -76,16 +76,16 @@ _PRECISION_PATTERNS: dict = {
 
 # ── Cost-model optimisation flags ─────────────────────────────────────────────
 _COST_MODEL_CXXFLAGS = {
-    "default":   "-O2",
-    "cheap":     "-O1",
-    "unlimited": "-O3 -ffast-math -march=native",
-    "disabled":  "-O0 -fno-vectorize",
+    "default":   "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
+    # "cheap":     "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
+    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -Rpass-analysis=loop-vectorize",
+    "disabled":  "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-vectorize -fno-slp-vectorize",
 }
 _COST_MODEL_CXXFLAGS_GCC = {
-    "default":   "-O2",
-    "cheap":     "-O1",
-    "unlimited": "-O3 -ffast-math -march=native",
-    "disabled":  "-O0 -fno-tree-vectorize",
+    "default":   "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -ftree-vectorize -fvect-cost-model=dynamic",
+    "cheap":     "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -ftree-vectorize -fvect-cost-model=cheap",
+    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -fno-vect-cost-model",
+    "disabled":  "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -fno-tree-vectorize",
 }
 
 
@@ -365,6 +365,8 @@ def main(argv=None):
     print(f"Skip DaCe    : {args.no_dace}")
 
     for idx, (precision, name, compiler, cost_model, cpu) in enumerate(my_runs, 1):
+        if compiler == "clang" and cost_model == "cheap":
+            continue
         print(f"\\n=== [shard {shard_id}/{num_shards}] [{idx}/{len(my_runs)}] [{precision}] {name} ===")
         compile_cell(
             name=name,
