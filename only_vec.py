@@ -96,6 +96,66 @@ _VEC_REMARK_FLAGS = {
     "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
 }
 
+import platform as _platform
+
+# ── CPU → ISA-specific vectorization width config ─────────────────────────────
+# Each entry: (isa_family, native_width_bits)
+#   isa_family: "x86" -> use -mprefer-vector-width
+#               "sve" -> use -msve-vector-bits (ARM SVE cores)
+#               "neon" -> no ISA-level width knob; use LLVM -force-vector-width
+_CPU_ISA_INFO = {
+    "amd_epyc":        ("x86",  256),   # Zen2/3, AVX2, 256-bit native
+    "amd_epyc_genoa":  ("x86",  512),   # Zen4, AVX-512, 512-bit native
+    "intel_xeon":      ("x86",  512),   # Skylake+ AVX-512
+    "arm_grace":       ("sve",  128),   # Neoverse V2, SVE2 128-bit vectors
+    "fugaku_a64fx":    ("sve",  512),   # A64FX, SVE 512-bit vectors
+    "apple_m_series":  ("neon", 128),   # NEON only, 128-bit, no SVE
+    "ibm_power":       ("altivec", 128),# VSX/Altivec, 128-bit
+}
+
+# Fallback "elements-per-vector" used for -force-vector-width (LLVM internal,
+# expressed in elements, not bits — assume 32-bit float/int elements as base unit)
+def _force_vector_width_elems(width_bits: int) -> int:
+    return max(1, width_bits // 32)
+
+
+def _clang_vector_width_flags(cpu: str) -> str:
+    """
+    Return the correct Clang forced-vectorization-width flag(s) for a given
+    target CPU, matching its native ISA (x86 AVX*, ARM SVE, ARM NEON, POWER).
+    Used only for the 'unlimited' cost-model, where we want the vectorizer
+    to use the *maximum* natural width rather than whatever the cost model
+    picks.
+    """
+    info = _CPU_ISA_INFO.get(cpu)
+    if info is None:
+        return ""
+    isa_family, width_bits = info
+
+    if isa_family == "x86":
+        return f"-mprefer-vector-width={width_bits}"
+    elif isa_family == "sve":
+        return f"-msve-vector-bits={width_bits}"
+    else:
+        # NEON-only ARM (e.g. Apple M-series) or POWER/Altivec: no ISA-level
+        # width flag exists in Clang, so force it at the LLVM loop-vectorizer
+        # level directly, in elements.
+        elems = _force_vector_width_elems(width_bits)
+        return f"-mllvm -force-vector-width={elems}"
+
+
+def _host_arch_matches_target(cpu: str) -> bool:
+    """
+    Sanity check: warn (but don't fail) if the host machine's actual
+    architecture (arm64 vs x86_64) doesn't match the requested --cpus target,
+    since forced-width flags are only meaningful when compiling natively for
+    that ISA (no cross-compilation toolchain assumed here).
+    """
+    host_machine = _platform.machine().lower()
+    host_is_arm = host_machine in ("arm64", "aarch64")
+    target_is_arm = _CPU_ISA_INFO.get(cpu, ("x86", 0))[0] in ("sve", "neon")
+    return host_is_arm == target_is_arm
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _source_env(script_path: pathlib.Path) -> dict:
@@ -112,11 +172,11 @@ def _source_env(script_path: pathlib.Path) -> dict:
     return env
 
 
-def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
-    """Apply macOS overrides, cost-model flags, and remark flags to env."""
+def _build_env(env: dict, compiler: str, cost_model: str, cpu: str) -> dict:
+    """Apply macOS overrides, cost-model flags, remark flags, and
+    architecture-correct forced vector width (clang + unlimited only)."""
     env = dict(env)
 
-    # macOS compiler overrides
     if platform.system() == "Darwin":
         if compiler == "clang":
             env["CXX"] = "clang++"
@@ -127,7 +187,6 @@ def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
             env["CXX_COMPILER"] = "gcc"
             env["DACE_compiler_cpu_executable"] = "/opt/homebrew/bin/g++-15"
 
-    # Cost-model optimisation flags (must come before remark flags in CXXFLAGS)
     opt_flags = (
         _COST_MODEL_CXXFLAGS_GCC if compiler == "gcc" else _COST_MODEL_CXXFLAGS
     ).get(cost_model, "")
@@ -135,7 +194,19 @@ def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
         existing = env.get("CXXFLAGS", "")
         env["CXXFLAGS"] = f"{opt_flags} {existing}".strip()
 
-    # Vectorisation remark flags (diagnostic only — appended last)
+    # ── Forced vectorization width, arch-correct, clang + unlimited only ──
+    if compiler == "clang" and cost_model == "unlimited":
+        width_flag = _clang_vector_width_flags(cpu)
+        if width_flag:
+            if not _host_arch_matches_target(cpu):
+                print(
+                    f"  [warn] host arch {_platform.machine()} != target ISA "
+                    f"for cpu={cpu}; forced width flag may not apply natively",
+                    file=sys.stderr,
+                )
+            existing = env.get("CXXFLAGS", "")
+            env["CXXFLAGS"] = f"{existing} {width_flag}".strip()
+
     remark_flags = _VEC_REMARK_FLAGS.get(compiler, "")
     if remark_flags:
         env["CXXFLAGS"] = f"{env.get('CXXFLAGS', '')} {remark_flags}".strip()
@@ -263,7 +334,7 @@ def compile_cell(
             "--out",        str(script_path),
         ], check=True)
 
-    env = _build_env(_source_env(script_path), compiler, cost_model)
+    env = _build_env(_source_env(script_path), compiler, cost_model, cpu)
 
     key = (precision, tsvc_version)
     if key not in _PRECISION_PATTERNS:
