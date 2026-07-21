@@ -45,6 +45,34 @@ _VEC_REMARK_FLAGS = {
     "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
 }
 
+# Fortran compiler candidates per C++ compiler family (tried in order).
+# flang-new is the real LLVM Fortran driver; many distros ship only that name.
+# The bare `flang` on macOS/some distros is a stub that accepts no flags.
+_FORTRAN_COMPILER_CANDIDATES = {
+    "clang": ["flang-new", "flang"],
+    "gcc":   ["gfortran"],
+    "icpx":  ["ifx", "ifort"],
+}
+
+_FORTRAN_VEC_FLAGS = {
+    "clang": "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize",
+    "gcc":   "-fopt-info-vec-all",
+    "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
+}
+
+_FORTRAN_OPT_FLAGS = {
+    "disabled":  "-O0 -march=native -fno-vectorize",
+    "default":   "-O3 -march=native -fvectorize",
+    "unlimited": "-O3 -march=native",
+}
+
+_FORTRAN_OPT_FLAGS_GCC = {
+    "disabled":  "-O3 -march=native -fno-tree-vectorize",
+    "cheap":     "-O3 -march=native -fvect-cost-model=cheap",
+    "default":   "-O3 -march=native -fvect-cost-model=dynamic",
+    "unlimited": "-O3 -march=native -fno-vect-cost-model",
+}
+
 # VEC_HIT_RE = re.compile(r"(optimized: loop vectorized|loop vectorized using|loop vectorized$|vectorized loop \(|LOOP AUTO-VECTORIZED|interleaved loop)", re.IGNORECASE)
 # VEC_MISS_RE = re.compile(r"(missed:|not vectorized|loop not vectorized|vectorization is possible but not beneficial|could not be vectorized|not beneficial)", re.IGNORECASE)
 # WHY_RE = re.compile(r"(remark:|missed:|not vectorized|unsafe|dependen|cannot|could not|cost-model|beneficial|vectorized)", re.IGNORECASE)
@@ -289,7 +317,7 @@ def summarize_vectorization(text: str, kernel_cpp: str | None = None) -> tuple[s
         return "yes", (hits + misses + why)[:12], vec_count, miss_count
     if misses:
         return "no", (misses + why)[:12], vec_count, miss_count
-    if why is 0:
+    if why == 0:
         return f"0/{previous}, disabled version, no vectorisation"
     return "no", ([*why][:12] or ["0/1 loops vectorized (1 not vectorized)"]), 0, 0
 
@@ -416,6 +444,43 @@ def compile_sdfg(sdfg_path: pathlib.Path, out_dir: pathlib.Path, env: dict) -> t
     return proc.returncode, status, reasons, vec_count, miss_count
 
 
+def compile_fortran(
+    f90_path: pathlib.Path,
+    out_dir: pathlib.Path,
+    compiler: str,
+    cost_model: str,
+    env: dict,
+) -> tuple[int, str, list[str], int, int]:
+    """Compile a .f90 file with the Fortran equivalent of *compiler* and
+    return (returncode, status, reasons, vec_count, miss_count)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    fc = next(
+        (c for c in _FORTRAN_COMPILER_CANDIDATES.get(compiler, []) if shutil.which(c)),
+        None,
+    )
+    if not fc:
+        candidates = _FORTRAN_COMPILER_CANDIDATES.get(compiler, [])
+        return -1, "unavailable", [f"No Fortran compiler found (tried: {', '.join(candidates)})"], 0, 0
+
+    opt = (
+        _FORTRAN_OPT_FLAGS_GCC if compiler == "gcc" else _FORTRAN_OPT_FLAGS
+    ).get(cost_model, "-O3 -march=native")
+    vec_flags = _FORTRAN_VEC_FLAGS.get(compiler, "")
+
+    flags = f"{opt} {vec_flags}".split()
+    cmd = [fc, *flags, "-c", str(f90_path), "-o", str(out_dir / "kernel.o")]
+
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    remarks = proc.stderr + proc.stdout
+    (out_dir / "stdout.txt").write_text(proc.stdout)
+    (out_dir / "stderr.txt").write_text(proc.stderr)
+    (out_dir / "vec_remarks.rpt").write_text(remarks)
+
+    status, reasons, vec_count, miss_count = summarize_vectorization(remarks)
+    return proc.returncode, status, reasons, vec_count, miss_count
+
+
 def parse_args(argv: Iterable[str] | None = None):
     ap = argparse.ArgumentParser(description="Compile CloudSC SDFGs and generate vectorization reports.")
     ap.add_argument("--root", default="cloudsc_variants", help="Root folder containing benchmark subfolders.")
@@ -471,6 +536,32 @@ def main(argv: Iterable[str] | None = None) -> int:
                         *[f"- {r}" for r in reasons],
                         f"Artifacts: vec_reports/{sdfg_path.stem}/{cell}/",
                     ])
+
+                    # ── Fortran baseline ──────────────────────────────────────
+                    f90_path = bench_dir / f"{bench_name}.f90"
+                    if f90_path.exists():
+                        fort_out = bench_dir / "vec_reports" / "fortran" / bench_name / cell
+                        frc, fstatus, freasons, fvec, fmiss = compile_fortran(
+                            f90_path, fort_out, compiler, cost_model, env
+                        )
+                        ftotal = fvec + fmiss
+                        fcount = f"{fvec}/{ftotal} loops vectorized" if ftotal > 0 else "no loop counts available"
+                        report_lines.extend([
+                            "",
+                            f"--- Fortran baseline ({next(iter(_FORTRAN_COMPILER_CANDIDATES.get(compiler, ['?'])), '?')}) [{cell}] ---",
+                            f"Return code: {frc}",
+                            f"Vectorized: {fstatus}",
+                            f"Loop counts: {fcount} ({fmiss} not vectorized)",
+                            "Reasons:",
+                            *[f"- {r}" for r in freasons],
+                            f"Artifacts: vec_reports/fortran/{bench_name}/{cell}/",
+                        ])
+                    else:
+                        report_lines.extend([
+                            "",
+                            f"--- Fortran baseline [{cell}] ---",
+                            f"SKIP — {f90_path} not found",
+                        ])
 
         report_path = bench_dir / f"vectorization_report_{sdfg_path.stem}.txt"
         report_path.write_text("\n".join(report_lines) + "\n")

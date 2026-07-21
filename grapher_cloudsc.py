@@ -6,8 +6,8 @@ ROOT = "cloudsc_variants"
 SKIP_DIRS = {"harness"}
 COST_MODEL_ORDER = ["cheap", "default", "unlimited", "disabled"]
 COMPILER_ORDER = ["clang", "gcc"]
-FRONTEND_ORDER = ["python", "fortran"]
-COLOR_MAP = {"clang": "#4C78A8", "gcc": "#F58518"}
+FRONTEND_ORDER = ["python", "fortran", "f90"]
+COLOR_MAP = {"clang": "#4C78A8", "gcc": "#F58518", "f90": "#26EB47"}
 
 def parse_report(text, frontend_label):
     rows = []
@@ -41,6 +41,31 @@ def parse_report(text, frontend_label):
                           'cost_model': cost_model, 'vectorized': vec, 'total_loops': clang_total})
     return rows
 
+def parse_fortran_baseline(text):
+    """Extract embedded '--- Fortran baseline ---' sections from a report file."""
+    rows = []
+    kernel_blocks = re.split(r'\n(?=Benchmark:)', text.strip())
+    for kblock in kernel_blocks:
+        kmatch = re.search(r'Benchmark:\s*(\S+)', kblock)
+        if not kmatch:
+            continue
+        kernel = kmatch.group(1)
+        fort_sections = re.split(r'\n(?=--- Fortran baseline)', kblock)
+        for sec in fort_sections[1:]:
+            cell_m = re.search(r'\[([^\]]+)\]', sec)
+            if not cell_m:
+                continue
+            cell = cell_m.group(1)
+            cm_match = re.match(r'(clang|gcc|icpx)_.*_(cheap|default|unlimited|disabled)$', cell)
+            if not cm_match:
+                continue
+            compiler, cost_model = cm_match.group(1), cm_match.group(2)
+            lc = re.search(r'Loop counts:\s*(\d+)/(\d+)\s*loops vectorized', sec)
+            vec = int(lc.group(1)) if lc else 0
+            rows.append({'kernel': kernel, 'frontend': 'f90', 'compiler': compiler,
+                         'cost_model': cost_model, 'vectorized': vec, 'total_loops': None})
+    return rows
+
 def collect_all_reports(root=ROOT):
     all_rows = []
     for kernel_dir in sorted(os.listdir(root)):
@@ -49,14 +74,25 @@ def collect_all_reports(root=ROOT):
         kdir_path = os.path.join(root, kernel_dir)
         if not os.path.isdir(kdir_path):
             continue
-        for frontend in FRONTEND_ORDER:
+        fort_loaded = False
+        for frontend in ["python", "fortran"]:
             fpath = os.path.join(kdir_path, f"vectorization_report_{kernel_dir}_{frontend}_frontend.txt")
             if os.path.exists(fpath):
                 with open(fpath) as f:
-                    all_rows.extend(parse_report(f.read(), frontend))
+                    text = f.read()
+                all_rows.extend(parse_report(text, frontend))
+                if not fort_loaded:
+                    all_rows.extend(parse_fortran_baseline(text))
+                    fort_loaded = True
             else:
                 print(f"Warning: missing {fpath}")
-    return pd.DataFrame(all_rows)
+    # Back-fill total_loops for f90 rows using the kernel-level max from SDFG rows
+    df = pd.DataFrame(all_rows)
+    if not df.empty and 'f90' in df['frontend'].values:
+        kernel_totals = df[df['frontend'] != 'f90'].groupby('kernel')['total_loops'].max()
+        mask = df['frontend'] == 'f90'
+        df.loc[mask, 'total_loops'] = df.loc[mask, 'kernel'].map(kernel_totals)
+    return df
 
 def make_kernel_chart(df, kernel, output_dir="output"):
     os.makedirs(output_dir, exist_ok=True)
@@ -72,7 +108,8 @@ def make_kernel_chart(df, kernel, output_dir="output"):
                 row = sub[(sub['frontend']==fe)&(sub['compiler']==compiler)&(sub['cost_model']==cm)]
                 x_labels.append(f"{fe[:2].upper()}_{compiler}_{cm}")
                 y_vals.append(int(row['vectorized'].values[0]) if not row.empty else 0)
-                colors.append(COLOR_MAP[compiler])
+                # f90 bars get their own colour; SDFG bars use the compiler colour
+                colors.append(COLOR_MAP["f90"] if fe == "f90" else COLOR_MAP[compiler])
 
     fig = go.Figure()
     fig.add_trace(go.Bar(x=x_labels, y=y_vals, marker_color=colors,
@@ -80,7 +117,8 @@ def make_kernel_chart(df, kernel, output_dir="output"):
     fig.add_hline(y=total_loops, line_dash="dash", line_color="gray",
                   annotation_text=f"Total = {total_loops}", annotation_position="top left")
     fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["clang"], textposition='outside', name="Clang"))
-    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["gcc"], textposition='outside', name="GCC"))
+    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["gcc"],   textposition='outside', name="GCC"))
+    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["f90"],   textposition='outside', name="Fortran baseline"))
 
     fig.update_layout(
         title={"text": f"Loops Vectorized — {kernel}<br>"
@@ -93,10 +131,10 @@ def make_kernel_chart(df, kernel, output_dir="output"):
     fig.update_traces(cliponaxis=False)
 
     out_name = os.path.join(output_dir, f"vectorization_{kernel}.png")
-    fig.write_image(out_name, width=1400, height=700)
+    fig.write_image(out_name, width=1800, height=700)
     with open(out_name + ".meta.json", "w") as f:
         json.dump({"caption": f"Raw loops vectorized — {kernel}",
-                    "description": f"16-category column chart of vectorized loop counts by frontend, compiler, cost model for {kernel}."}, f)
+                    "description": f"24-category column chart of vectorized loop counts by frontend (python/fortran/f90), compiler, cost model for {kernel}."}, f)
     return out_name
 
 df = collect_all_reports(ROOT)
