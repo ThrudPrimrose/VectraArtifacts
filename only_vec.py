@@ -325,6 +325,7 @@ def compile_cell(
     # need *different* cells, so this is naturally race-free as long as no
     # two shards are ever assigned the same cell (guaranteed by the
     # strided slicing in main()).
+    print("debug before source \n")
     if not script_path.exists():
         subprocess.run([
             "vectra-source-sh",
@@ -333,9 +334,9 @@ def compile_cell(
             "--cpu",        cpu,
             "--out",        str(script_path),
         ], check=True)
-
+    print("debug after source \n")
     env = _build_env(_source_env(script_path), compiler, cost_model, cpu)
-
+    print("debug after build env \n")
     key = (precision, tsvc_version)
     if key not in _PRECISION_PATTERNS:
         raise KeyError(f"No glob pattern for precision={precision!r}, tsvc_version={tsvc_version!r}")
@@ -347,7 +348,7 @@ def compile_cell(
         cpp_build_dir = cpp_out_dir / "build"
         cpp_out_dir.mkdir(parents=True, exist_ok=True)
         cpp_build_dir.mkdir(parents=True, exist_ok=True)
-
+        print("debug before CPP \n")
         result = subprocess.run([
             "python3", "-m", f"{tsvc_module}.compile_cpp_kernels",
             cpp_kernels,
@@ -372,7 +373,7 @@ def compile_cell(
         dace_build_dir = dace_out_dir / "build"
         dace_out_dir.mkdir(parents=True, exist_ok=True)
         dace_build_dir.mkdir(parents=True, exist_ok=True)
-
+        print("debug before DaCe \n")
         result = subprocess.run([
             "python3", "-m", f"{tsvc_module}.compile_dace_kernels",
             dace_kernels,
@@ -393,8 +394,9 @@ def compile_cell(
 
 
 def main(argv=None):
+    print("debug 1 \n")
     args = parse_args(argv)
-
+    print("debug 2 \n")
     vcfg         = TSVC_VERSION_CONFIG[args.tsvc_version]
     tsvc_module  = vcfg["module"]
     cpp_kernels  = args.cpp_kernels  or vcfg["cpp_kernels_dir"]
@@ -419,7 +421,7 @@ def main(argv=None):
         for precision in precisions
         for (name, compiler, cost_model, cpu) in cells
     ]
-
+    print("debug 3 \n")
     shard_id, num_shards = _resolve_shard(args)
     my_runs = all_runs[shard_id::num_shards]
 
