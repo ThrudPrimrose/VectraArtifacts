@@ -53,6 +53,7 @@ import argparse
 import os
 import pathlib
 import platform
+import platform as _platform
 import statistics
 import subprocess
 import sys
@@ -89,18 +90,66 @@ _PRECISION_PATTERNS: dict = {
     ("float",  "tsvc_2_5"): ("*_f.cpp",        "*_f.py"),
 }
 
+# _COST_MODEL_CXXFLAGS = {
+#     "default":   "-O2",
+#     "cheap":     "-O1",
+#     "unlimited": "-O3 -ffast-math -march=native",
+#     "disabled":  "-O0 -fno-vectorize",
+# }
+# _COST_MODEL_CXXFLAGS_GCC = {
+#     "default":   "-O2",
+#     "cheap":     "-O1",
+#     "unlimited": "-O3 -ffast-math -march=native",
+#     "disabled":  "-O0 -fno-tree-vectorize",
+# }
+
+# ── Cost-model optimisation flags ─────────────────────────────────────────────
 _COST_MODEL_CXXFLAGS = {
-    "default":   "-O2",
-    "cheap":     "-O1",
-    "unlimited": "-O3 -ffast-math -march=native",
-    "disabled":  "-O0 -fno-vectorize",
+    "default":   "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
+    # "cheap":     "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
+    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -Rpass-analysis=loop-vectorize",
+    "disabled":  "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-vectorize -fno-slp-vectorize",
 }
 _COST_MODEL_CXXFLAGS_GCC = {
-    "default":   "-O2",
-    "cheap":     "-O1",
-    "unlimited": "-O3 -ffast-math -march=native",
-    "disabled":  "-O0 -fno-tree-vectorize",
+    "default":   "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -ftree-vectorize -fvect-cost-model=dynamic",
+    "cheap":     "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -ftree-vectorize -fvect-cost-model=cheap",
+    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -fno-vect-cost-model",
+    "disabled":  "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -fno-tree-vectorize",
 }
+
+
+# ── CPU → ISA-specific vectorization width config ─────────────────────────────
+_CPU_ISA_INFO = {
+    "amd_epyc":        ("x86",     256),
+    "amd_epyc_genoa":  ("x86",     512),
+    "intel_xeon":      ("x86",     512),
+    "arm_grace":       ("sve",     128),
+    "fugaku_a64fx":    ("sve",     512),
+    "apple_m_series":  ("neon",    128),
+    "ibm_power":       ("altivec", 128),
+}
+
+def _force_vector_width_elems(width_bits: int) -> int:
+    return max(1, width_bits // 32)
+
+def _clang_vector_width_flags(cpu: str) -> str:
+    info = _CPU_ISA_INFO.get(cpu)
+    if info is None:
+        return ""
+    isa_family, width_bits = info
+    if isa_family == "x86":
+        return f"-mprefer-vector-width={width_bits}"
+    elif isa_family == "sve":
+        return f"-msve-vector-bits={width_bits}"
+    else:
+        elems = _force_vector_width_elems(width_bits)
+        return f"-mllvm -force-vector-width={elems}"
+
+def _host_arch_matches_target(cpu: str) -> bool:
+    host_machine = _platform.machine().lower()
+    host_is_arm = host_machine in ("arm64", "aarch64")
+    target_is_arm = _CPU_ISA_INFO.get(cpu, ("x86", 0))[0] in ("sve", "neon")
+    return host_is_arm == target_is_arm
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -117,7 +166,7 @@ def _source_env(script_path: pathlib.Path) -> dict:
     return env
 
 
-def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
+def _build_env(env: dict, compiler: str, cost_model: str, cpu: str = "apple_m_series") -> dict:
     env = dict(env)
     if platform.system() == "Darwin":
         if compiler == "clang":
@@ -136,7 +185,35 @@ def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
         existing = env.get("CXXFLAGS", "")
         env["CXXFLAGS"] = f"{opt_flags} {existing}".strip()
 
+    # Arch-correct forced vector width for clang + unlimited (mirrors only_vec.py)
+    if compiler == "clang" and cost_model == "unlimited":
+        width_flag = _clang_vector_width_flags(cpu)
+        if width_flag:
+            if not _host_arch_matches_target(cpu):
+                print(
+                    f"  [warn] host arch {_platform.machine()} != target ISA "
+                    f"for cpu={cpu}; forced width flag may not apply natively",
+                    file=sys.stderr,
+                )
+            existing = env.get("CXXFLAGS", "")
+            env["CXXFLAGS"] = f"{existing} {width_flag}".strip()
+
     return env
+
+
+def _resolve_shard(args) -> tuple[int, int]:
+    """Resolve (shard_id, num_shards) from CLI flags or SLURM env vars."""
+    shard_id   = args.shard_id
+    num_shards = args.num_shards
+    if shard_id is None:
+        shard_id = int(os.environ.get("SLURM_PROCID", 0))
+    if num_shards is None:
+        num_shards = int(os.environ.get("SLURM_NTASKS", 1))
+    if num_shards < 1:
+        raise ValueError(f"--num-shards must be >= 1, got {num_shards}")
+    if not (0 <= shard_id < num_shards):
+        raise ValueError(f"--shard-id {shard_id} out of range for --num-shards {num_shards}")
+    return shard_id, num_shards
 
 
 def _read_vec_report(vec_report_path: pathlib.Path) -> dict[str, str]:
@@ -341,6 +418,14 @@ valid precisions  : {", ".join(ALL_PRECISIONS)}
             "cached .so files are rebuilt with std::chrono hooks injected."
         ),
     )
+    ap.add_argument(
+        "--shard-id", type=int, default=None, metavar="N",
+        help="0-indexed shard this process handles. Defaults to $SLURM_PROCID if unset.",
+    )
+    ap.add_argument(
+        "--num-shards", type=int, default=None, metavar="K",
+        help="Total number of shards. Defaults to $SLURM_NTASKS if unset (i.e. 1 = no sharding).",
+    )
     return ap.parse_args(argv)
 
 
@@ -353,8 +438,8 @@ def main(argv=None):
     cpp_kernels  = args.cpp_kernels  or vcfg["cpp_kernels_dir"]
     dace_kernels = args.dace_kernels or vcfg["dace_kernels_dir"]
 
-    base_cpp  = pathlib.Path(args.results_cpp  or f"results_cpp/{args.tsvc_version}")
-    base_dace = pathlib.Path(args.results_dace or f"results_dace/{args.tsvc_version}")
+    base_cpp  = pathlib.Path(args.results_cpp  or "results_cpp")  / args.tsvc_version
+    base_dace = pathlib.Path(args.results_dace or "results_dace") / args.tsvc_version
 
     precisions = ["double", "float"] if args.precision == "both" else [args.precision]
 
@@ -365,7 +450,15 @@ def main(argv=None):
         for cpu        in args.cpus
     ]
 
-    total = len(cells) * len(precisions)
+    # Flatten precision x cells, then shard across SLURM tasks.
+    all_runs = [
+        (precision, name, compiler, cost_model, cpu)
+        for precision in precisions
+        for (name, compiler, cost_model, cpu) in cells
+    ]
+    shard_id, num_shards = _resolve_shard(args)
+    my_runs = all_runs[shard_id::num_shards]
+    total = len(my_runs)
 
     print(f"TSVC version  : {args.tsvc_version}  (module: {tsvc_module})")
     print(f"Results CPP   : {base_cpp}")
@@ -375,84 +468,87 @@ def main(argv=None):
     print(f"CPUs          : {args.cpus}")
     print(f"Precisions    : {precisions}")
     print(f"Reps          : {args.reps}  |  len_1d={args.len_1d}  |  kernel_timeout={args.kernel_timeout}s")
-    print(f"Cells         : {total}")
+    print(f"Total runs    : {len(all_runs)}")
+    print(f"Shard         : {shard_id} / {num_shards}  ->  {total} run(s) assigned to this process")
     print(f"Skip CPP      : {args.no_cpp}  |  Skip DaCe: {args.no_dace}")
     print(f"Force DaCe    : {args.force_dace}")
 
     scripts_dir = pathlib.Path("scripts")
     idx = 0
 
-    for precision in precisions:
+    for precision, name, compiler, cost_model, cpu in my_runs:
+        if compiler == "clang" and cost_model == "cheap":
+            continue
+
         key = (precision, args.tsvc_version)
         if key not in _PRECISION_PATTERNS:
             print(f"WARNING: no pattern for {key}, skipping precision={precision}", file=sys.stderr)
             continue
         pattern_cpp, pattern_dace = _PRECISION_PATTERNS[key]
 
-        for name, compiler, cost_model, cpu in cells:
-            idx += 1
-            print(f"\n=== [{idx}/{total}] [{precision}] {name} ===")
+        idx += 1
+        print(f"\n=== [shard {shard_id}/{num_shards}] [{idx}/{total}] [{precision}] {name} ===")
 
-            script_path = scripts_dir / f"source.{name}.sh"
-            if not script_path.exists():
-                subprocess.run([
-                    "vectra-source-sh",
-                    "--compiler",   compiler,
-                    "--cost-model", cost_model,
-                    "--cpu",        cpu,
-                    "--out",        str(script_path),
-                ], check=True)
+        script_path = scripts_dir / f"source.{name}.sh"
+        if not script_path.exists():
+            subprocess.run([
+                "vectra-source-sh",
+                "--compiler",   compiler,
+                "--cost-model", cost_model,
+                "--cpu",        cpu,
+                "--out",        str(script_path),
+            ], check=True)
 
-            env = _build_env(_source_env(script_path), compiler, cost_model)
+        env = _build_env(_source_env(script_path), compiler, cost_model, cpu)
 
-            # ── CPP ───────────────────────────────────────────────────────────
-            if not args.no_cpp:
-                cpp_cell = base_cpp / precision / name
-                if not cpp_cell.exists():
-                    print(f"  CPP  SKIP — cell dir not found: {cpp_cell}")
+        # ── CPP ───────────────────────────────────────────────────────────
+        if not args.no_cpp:
+            cpp_cell = base_cpp / precision / name
+            if not cpp_cell.exists():
+                print(f"  CPP  SKIP — cell dir not found: {cpp_cell}")
+            else:
+                t0  = _time.perf_counter()
+                out = _time_cpp_cell(
+                    cell_dir=cpp_cell,
+                    tsvc_module=tsvc_module,
+                    cpp_kernels=cpp_kernels,
+                    pattern=pattern_cpp,
+                    reps=args.reps,
+                    len_1d=args.len_1d,
+                    kernel_timeout=args.kernel_timeout,
+                    env=env,
+                )
+                elapsed = _time.perf_counter() - t0
+                if out:
+                    print(f"  CPP  OK   ({elapsed:.1f}s) — {out}")
                 else:
-                    t0  = _time.perf_counter()
-                    out = _time_cpp_cell(
-                        cell_dir=cpp_cell,
-                        tsvc_module=tsvc_module,
-                        cpp_kernels=cpp_kernels,
-                        pattern=pattern_cpp,
-                        reps=args.reps,
-                        len_1d=args.len_1d,
-                        kernel_timeout=args.kernel_timeout,
-                        env=env,
-                    )
-                    elapsed = _time.perf_counter() - t0
-                    if out:
-                        print(f"  CPP  OK   ({elapsed:.1f}s) — {out}")
-                    else:
-                        print(f"  CPP  FAILED ({elapsed:.1f}s)")
+                    print(f"  CPP  FAILED ({elapsed:.1f}s)")
 
-            # ── DaCe ──────────────────────────────────────────────────────────
-            if not args.no_dace:
-                dace_cell = base_dace / precision / name
-                if not dace_cell.exists():
-                    print(f"  DaCe SKIP — cell dir not found: {dace_cell}")
+        # ── DaCe ──────────────────────────────────────────────────────────
+        if not args.no_dace:
+            dace_cell = base_dace / precision / name
+            if not dace_cell.exists():
+                print(f"  DaCe SKIP — cell dir not found: {dace_cell}")
+            else:
+                t0  = _time.perf_counter()
+                out = _time_dace_cell(
+                    cell_dir=dace_cell,
+                    tsvc_module=tsvc_module,
+                    dace_kernels=dace_kernels,
+                    pattern=pattern_dace,
+                    reps=args.reps,
+                    len_1d=args.len_1d,
+                    kernel_timeout=args.kernel_timeout,
+                    env=env,
+                    force=args.force_dace,
+                )
+                elapsed = _time.perf_counter() - t0
+                if out:
+                    print(f"  DaCe OK   ({elapsed:.1f}s) — {out}")
                 else:
-                    t0  = _time.perf_counter()
-                    out = _time_dace_cell(
-                        cell_dir=dace_cell,
-                        tsvc_module=tsvc_module,
-                        dace_kernels=dace_kernels,
-                        pattern=pattern_dace,
-                        reps=args.reps,
-                        len_1d=args.len_1d,
-                        kernel_timeout=args.kernel_timeout,
-                        env=env,
-                        force=args.force_dace,  # ← fixed: was undefined `force`
-                    )
-                    elapsed = _time.perf_counter() - t0
-                    if out:
-                        print(f"  DaCe OK   ({elapsed:.1f}s) — {out}")
-                    else:
-                        print(f"  DaCe FAILED ({elapsed:.1f}s)")
+                    print(f"  DaCe FAILED ({elapsed:.1f}s)")
 
-    print(f"\nDone. {idx} cell(s) timed.")
+    print(f"\nDone. Shard {shard_id}/{num_shards} timed {idx} cell(s).")
 
 
 if __name__ == "__main__":
