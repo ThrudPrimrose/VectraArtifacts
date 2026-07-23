@@ -110,8 +110,8 @@ _DELTAS: Dict[Tuple[Compiler, CostModel], Tuple[str, ...]] = {
     (Compiler.CLANG, CostModel.UNLIMITED): ("-fvectorize", "-mprefer-vector-width=__VEC_WIDTH__"),
     (Compiler.CLANG, CostModel.DISABLED):  ("-fno-vectorize", "-fno-slp-vectorize"),
 
-    (Compiler.GCC, CostModel.DEFAULT):   ("-fvect-cost-model=dynamic"),
-    (Compiler.GCC, CostModel.CHEAP):     ("-fvect-cost-model=cheap"),
+    (Compiler.GCC, CostModel.DEFAULT):   ("-fvect-cost-model=dynamic",),
+    (Compiler.GCC, CostModel.CHEAP):     ("-fvect-cost-model=cheap",),
     (Compiler.GCC, CostModel.UNLIMITED): ("-ftree-vectorize", "-fvect-cost-model=unlimited"),
     (Compiler.GCC, CostModel.DISABLED):  ("-fno-tree-vectorize", "-fno-tree-slp-vectorize"),
 
