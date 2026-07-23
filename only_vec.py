@@ -402,8 +402,11 @@ def main(argv=None):
     cpp_kernels  = args.cpp_kernels  or vcfg["cpp_kernels_dir"]
     dace_kernels = args.dace_kernels or vcfg["dace_kernels_dir"]
 
-    base_cpp  = pathlib.Path(args.out_cpp  or f"results_cpp/{args.tsvc_version}")
-    base_dace = pathlib.Path(args.out_dace or f"results_dace/{args.tsvc_version}")
+    # base_cpp  = pathlib.Path(args.out_cpp  or f"results_cpp/{args.tsvc_version}")
+    # base_dace = pathlib.Path(args.out_dace or f"results_dace/{args.tsvc_version}")
+
+    base_cpp  = pathlib.Path(args.out_cpp  or "results_cpp") / args.tsvc_version
+    base_dace = pathlib.Path(args.out_dace or "results_dace") / args.tsvc_version
 
     precisions = ["double", "float"] if args.precision == "both" else [args.precision]
 
