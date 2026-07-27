@@ -93,12 +93,9 @@ BASELINE_FLAGS: Tuple[str, ...] = (
     "-O3",
     "-std=c++17",
     "-fPIC",
-    # "-ffast-math",
+    "-ffast-math",
     "-fno-math-errno",
     "-fstrict-aliasing",
-    "-ffinite-math-only",
-    "-fno-signaling-nans",
-    "-fno-trapping-math",
     "-faligned-new",
 )
 
@@ -106,12 +103,12 @@ LINK_BASE_FLAGS: Tuple[str, ...] = ("-shared",)
 
 _DELTAS: Dict[Tuple[Compiler, CostModel], Tuple[str, ...]] = {
     (Compiler.CLANG, CostModel.DEFAULT):   (),
-    # (Compiler.CLANG, CostModel.CHEAP):     ("-mprefer-vector-width=__VEC_WIDTH__",),
-    (Compiler.CLANG, CostModel.UNLIMITED): ("-fvectorize", "-mprefer-vector-width=__VEC_WIDTH__"),
+    (Compiler.CLANG, CostModel.CHEAP):     ("-mprefer-vector-width=__VEC_WIDTH__",),
+    (Compiler.CLANG, CostModel.UNLIMITED): ("-fvectorize", "-fvect-cost-model=none"),
     (Compiler.CLANG, CostModel.DISABLED):  ("-fno-vectorize", "-fno-slp-vectorize"),
 
-    (Compiler.GCC, CostModel.DEFAULT):   ("-fvect-cost-model=dynamic",),
-    (Compiler.GCC, CostModel.CHEAP):     ("-fvect-cost-model=cheap",),
+    (Compiler.GCC, CostModel.DEFAULT):   (),
+    (Compiler.GCC, CostModel.CHEAP):     ("-mprefer-vector-width=__VEC_WIDTH__",),
     (Compiler.GCC, CostModel.UNLIMITED): ("-ftree-vectorize", "-fvect-cost-model=unlimited"),
     (Compiler.GCC, CostModel.DISABLED):  ("-fno-tree-vectorize", "-fno-tree-slp-vectorize"),
 
@@ -329,10 +326,10 @@ def _rationale_for(compiler: Compiler,
                    arm_autovec: Optional[ArmAutovecPreference] = None) -> str:
     base = {
         (Compiler.CLANG, CostModel.DEFAULT):   "Clang -O3 baseline; paper Table 2 Default row + artifact additions.",
-        # (Compiler.CLANG, CostModel.CHEAP):     "Clang -mprefer-vector-width=N (no user-facing cheap knob; width hint = paper's next step down).",
+        (Compiler.CLANG, CostModel.CHEAP):     "Clang -mprefer-vector-width=N (no user-facing cheap knob; width hint = paper's next step down).",
         (Compiler.CLANG, CostModel.UNLIMITED): "Clang -O3 -fvectorize -fslp-vectorize -fvect-cost-model=none; vectorise whenever physically possible, profitability ignored.",
         (Compiler.CLANG, CostModel.DISABLED):  "Clang -fno-vectorize -fno-slp-vectorize; all SIMD generation suppressed (scalar baseline).",
-        (Compiler.GCC,   CostModel.DEFAULT):   "GCC -O3 -fvect-cost-model=dynamic baseline (auto-vectorize implicit at -O3).",
+        (Compiler.GCC,   CostModel.DEFAULT):   "GCC -O3 baseline (auto-vectorize implicit at -O3).",
         (Compiler.GCC,   CostModel.CHEAP):     "GCC -fvect-cost-model=cheap -fsimd-cost-model=cheap; lower profitability bar than default.",
         (Compiler.GCC,   CostModel.UNLIMITED): "GCC -ftree-vectorize -ftree-slp-vectorize -fvect-cost-model=unlimited; vectorise whenever physically possible, profitability ignored.",
         (Compiler.GCC,   CostModel.DISABLED):  "GCC -fno-tree-vectorize -fno-tree-slp-vectorize; all SIMD generation suppressed (scalar baseline).",
@@ -354,25 +351,6 @@ def _rationale_for(compiler: Compiler,
     return s
 
 
-# ISA-correct forced-width flags for clang+unlimited, keyed by cpu name.
-# These are appended AFTER the base delta flags so they override any earlier
-# -mprefer-vector-width that might have slipped in via __VEC_WIDTH__ resolution.
-#
-# x86: -mprefer-vector-width=N  (N = natural AVX/AVX-512 register width)
-# ARM SVE: -msve-vector-bits=N  (set the SVE vector length)
-# ARM NEON / POWER: -mllvm -force-vector-width=E  (E = N/32, element count)
-_CLANG_UNLIMITED_WIDTH_FLAGS: Dict[str, Tuple[str, ...]] = {
-    "intel_xeon":     ("-mprefer-vector-width=512",),
-    "amd_epyc":       ("-mprefer-vector-width=256",),
-    "amd_epyc_genoa": ("-mprefer-vector-width=512",),
-    "arm_grace":      ("-msve-vector-bits=128",),
-    "fugaku_a64fx":   ("-msve-vector-bits=512",),
-    # NEON-only / POWER: no ISA-level width flag, drive at LLVM loop-vectorizer level
-    "apple_m_series": ("-mllvm", "-force-vector-width=4"),
-    "ibm_power":      ("-mllvm", "-force-vector-width=4"),
-}
-
-
 def get_flags(compiler: Compiler,
               cost_model: CostModel,
               math: bool = False,
@@ -388,30 +366,19 @@ def get_flags(compiler: Compiler,
     flags.extend(_DELTAS[(compiler, cost_model)])
     flags = _resolve_placeholders(flags, cpu)
 
-    # On aarch64, -mprefer-vector-width is an x86-only flag and must be
-    # stripped / replaced so the compiler doesn't reject the invocation.
     if _is_aarch64_cpu(cpu):
-        if compiler is Compiler.CLANG and cost_model is CostModel.CHEAP:
-            flags = [f for f in flags if not f.startswith("-mprefer-vector-width")]
-        elif compiler is Compiler.GCC and cost_model is CostModel.CHEAP:
-            flags = [
-                "-fvect-cost-model=cheap" if f.startswith("-mprefer-vector-width") else f
-                for f in flags
-            ]
-
-    # Append ISA-correct vector-width flag for clang+unlimited.
-    # Covers x86 (AVX2/AVX-512), ARM SVE, ARM NEON, and POWER.
-    # cpu=None falls back to local hardware detection.
-    if compiler is Compiler.CLANG and cost_model is CostModel.UNLIMITED:
-        width_flags = _CLANG_UNLIMITED_WIDTH_FLAGS.get(cpu or "")
-        if width_flags:
-            flags.extend(width_flags)
-        elif cpu is None:
-            w = detect_local_vector_width()
-            if _is_aarch64_cpu(None):
-                flags.extend(["-mllvm", f"-force-vector-width={max(1, w // 32)}"])
-            else:
-                flags.append(f"-mprefer-vector-width={w}")
+        if compiler is Compiler.CLANG:
+            if cost_model is CostModel.CHEAP:
+                flags = [f for f in flags if not f.startswith("-mprefer-vector-width")]
+            elif cost_model is CostModel.UNLIMITED:
+                flags = [f for f in flags if f != "-fvect-cost-model=none"]
+                flags.extend(["-mllvm", "-force-vector-width=4"])
+        elif compiler is Compiler.GCC:
+            if cost_model is CostModel.CHEAP:
+                flags = [
+                    "-fvect-cost-model=cheap" if f.startswith("-mprefer-vector-width") else f
+                    for f in flags
+                ]
 
     if math:
         flags.extend(_MATH_FLAGS[compiler])
