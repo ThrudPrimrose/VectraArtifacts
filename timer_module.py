@@ -56,5 +56,5 @@ class InstrumentWithTimer(ppl.Pass):
         for sink in sinks:
             sdfg.add_edge(sink, end, InterstateEdge())
         self.wire(begin, 'time_ns', 'time_start', f'__out = {NOW_NS};', '#include <chrono>\n #include <iostream>')
-        self.wire(end, 'time_start', 'time_ns', f'__out = {NOW_NS} - __in;\n std::cout<< __in; std::cout << std::endl; std::cout<< __out <<std::endl; std::cout << ({NOW_NS}) << std::endl; std::cout << "next iteration" std::endl;', '')
+        self.wire(end, 'time_start', 'time_ns', f'__out = {NOW_NS} - __in;\n std::cout<< __in; std::cout << std::endl; std::cout<< __out <<std::endl; std::cout << ({NOW_NS}) << std::endl; std::cout << "next iteration" << std::endl;', '')
         return 'time_ns'
