@@ -18,19 +18,21 @@ import native  # noqa: E402
 KLON, NCLV = 4096, 5
 NCLDQL, NCLDQI, NCLDQV = 1, 2, 5
 RTOL = 1e-9
-CONSTS = dict(rtt=273.16, ramin=1e-6, rthomo=235.16, rkooptau=1e4,
-              ptsphy=2.0, zepsec=1e-12, nssopt=1)
+CONSTS = dict(rtt=273.16, ramin=1e-6, rthomo=235.16, rkooptau=1e4, ptsphy=2.0, zepsec=1e-12, nssopt=1)
 KER = "ice_supersaturation_adjustment"
+# NSSOPT is an integer switch, so it is passed separately from the float64 constants.
+CONST_ORDER = ["rtt", "ramin", "rthomo", "rkooptau", "ptsphy", "zepsec"]
+OUT = ("zsolqa", "zsolac", "zqxfg")
 
 
 def make_inputs():
     rng = np.random.default_rng(0)
     return dict(
-        ztp1=np.linspace(230.0, 290.0, KLON),                 # straddles RTHOMO & RTT
-        za=(0.4 + 0.6 * rng.random(KLON)),                    # some > 1-RAMIN
+        ztp1=np.linspace(230.0, 290.0, KLON),  # straddles RTHOMO & RTT
+        za=(0.4 + 0.6 * rng.random(KLON)),  # some > 1-RAMIN
         zqx_ncldqv=(1e-3 + 1e-3 * rng.random(KLON)),
         zqsice=(5e-4 + 1e-3 * rng.random(KLON)),
-        zcorqsice=(0.5 + rng.random(KLON)),                   # nonzero divisor
+        zcorqsice=(0.5 + rng.random(KLON)),  # nonzero divisor
         zfokoop=(0.5 + 1.5 * rng.random(KLON)),
         zsolqa=np.zeros((KLON, NCLV, NCLV)),
         zsolac=np.zeros(KLON),
@@ -44,20 +46,21 @@ def numpy_reference(arrays):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     a = {k: v.copy() for k, v in arrays.items()}
-    mod.ice_supersaturation_adjustment(
-        a["ztp1"], a["za"], a["zqx_ncldqv"], a["zqsice"], a["zcorqsice"], a["zfokoop"],
-        a["zsolqa"], a["zsolac"], a["zqxfg"],
-        CONSTS["rtt"], CONSTS["ramin"], CONSTS["rthomo"], CONSTS["rkooptau"],
-        CONSTS["ptsphy"], CONSTS["zepsec"], CONSTS["nssopt"],
-        KLON, NCLV, NCLDQL, NCLDQI, NCLDQV)
-    return {k: a[k] for k in ("zsolqa", "zsolac", "zqxfg")}
+    mod.ice_supersaturation_adjustment(a["ztp1"], a["za"], a["zqx_ncldqv"], a["zqsice"], a["zcorqsice"], a["zfokoop"],
+                                       a["zsolqa"], a["zsolac"], a["zqxfg"], CONSTS["rtt"], CONSTS["ramin"],
+                                       CONSTS["rthomo"], CONSTS["rkooptau"], CONSTS["ptsphy"], CONSTS["zepsec"],
+                                       CONSTS["nssopt"], KLON, NCLV, NCLDQL, NCLDQI, NCLDQV)
+    return {k: a[k] for k in OUT}
 
 
-def run_original_fortran(arrays):
+def run_original_fortran(arrays, timer_out=None):
     so = os.path.join(HERE, f"lib{KER}_orig.so")
     if not os.path.exists(so):
-        subprocess.run(["gfortran", "-O3", "-fPIC", "-shared", "-ffast-math", "-fno-math-errno",
-                        os.path.join(HERE, f"{KER}_w_timer.f90"), "-o", so], check=True)
+        subprocess.run([
+            "gfortran", "-O3", "-fPIC", "-shared", "-ffast-math", "-fno-math-errno",
+            os.path.join(HERE, f"{KER}_w_timer.f90"), "-o", so
+        ],
+                       check=True)
     lib = ctypes.CDLL(so)
     fn = lib.ice_supersaturation_adjustment
     fn.restype = None
@@ -65,17 +68,16 @@ def run_original_fortran(arrays):
     nd2 = np.ctypeslib.ndpointer(dtype=np.float64, ndim=2, flags="F_CONTIGUOUS")
     nd3 = np.ctypeslib.ndpointer(dtype=np.float64, ndim=3, flags="F_CONTIGUOUS")
     ci, cd = ctypes.c_int, ctypes.c_double
-    fn.argtypes = [ci, ci, ci, nd1, nd1, nd1, nd1, nd1, nd1, nd3, nd1, nd2,
-                   cd, cd, cd, ci, cd, cd, cd, ci, ci, ci, ci, nd1]
-    a = {k: (np.asfortranarray(v.copy()) if v.ndim >= 2 else np.asfortranarray(v.copy()))
-         for k, v in arrays.items()}
-    timer = np.zeros(2)
+    fn.argtypes = [
+        ci, ci, ci, nd1, nd1, nd1, nd1, nd1, nd1, nd3, nd1, nd2, cd, cd, cd, ci, cd, cd, cd, ci, ci, ci, ci, nd1
+    ]
+    a = {k: np.asfortranarray(v.copy()) for k, v in arrays.items()}
+    timer = timer_out if timer_out is not None else np.zeros(2)
     fn(1, KLON, KLON, a["ztp1"], a["za"], a["zqx_ncldqv"], a["zqsice"], a["zcorqsice"],
-       a["zfokoop"], a["zsolqa"], a["zsolac"], a["zqxfg"],
-       CONSTS["rtt"], CONSTS["ramin"], CONSTS["rthomo"], int(CONSTS["nssopt"]),
-       CONSTS["rkooptau"], CONSTS["ptsphy"], CONSTS["zepsec"],
-       NCLDQL, NCLDQI, NCLDQV, NCLV, timer)
-    return {k: a[k] for k in ("zsolqa", "zsolac", "zqxfg")}
+       a["zfokoop"], a["zsolqa"], a["zsolac"], a["zqxfg"], CONSTS["rtt"], CONSTS["ramin"], CONSTS["rthomo"],
+       int(CONSTS["nssopt"]), CONSTS["rkooptau"], CONSTS["ptsphy"], CONSTS["zepsec"], NCLDQL, NCLDQI, NCLDQV, NCLV,
+       timer)
+    return {k: a[k] for k in OUT}
 
 
 def run_native(arrays, lang_map, lang):
@@ -83,7 +85,29 @@ def run_native(arrays, lang_map, lang):
     env = dict(CONSTS, KLON=KLON, NCLV=NCLV, NCLDQL=NCLDQL, NCLDQI=NCLDQI, NCLDQV=NCLDQV)
     bufs = {k: np.ascontiguousarray(v.copy()) for k, v in arrays.items()}
     native.call_native(so, binding, env, bufs)
-    return {k: bufs[k] for k in ("zsolqa", "zsolac", "zqxfg")}
+    return {k: bufs[k] for k in OUT}
+
+
+def sdfg_kwargs(tag, a):
+    """Array + symbol kwargs for one compiled-SDFG call; ``a`` holds the live buffers."""
+    sc = {k: np.float64(CONSTS[k]) for k in CONST_ORDER}
+    if tag == "fortran_frontend":
+        return dict(**a,
+                    **sc,
+                    nssopt=np.int64(CONSTS["nssopt"]),
+                    klon=KLON,
+                    nclv=NCLV,
+                    ncldql=NCLDQL,
+                    ncldqi=NCLDQI,
+                    ncldqv=NCLDQV)
+    return dict(**a,
+                **sc,
+                nssopt=np.int64(CONSTS["nssopt"]),
+                KLON=KLON,
+                NCLV=NCLV,
+                NCLDQL=NCLDQL,
+                NCLDQI=NCLDQI,
+                NCLDQV=NCLDQV)
 
 
 def run_sdfg(tag, arrays, fortran_layout):
@@ -92,14 +116,8 @@ def run_sdfg(tag, arrays, fortran_layout):
     csdfg = sdfg.compile()
     order = "F" if fortran_layout else "C"
     a = {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
-    sc = {k: np.float64(CONSTS[k]) for k in ("rtt", "ramin", "rthomo", "rkooptau", "ptsphy", "zepsec")}
-    if tag == "fortran_frontend":
-        csdfg(**a, **sc, nssopt=np.int64(CONSTS["nssopt"]),
-              klon=KLON, nclv=NCLV, ncldql=NCLDQL, ncldqi=NCLDQI, ncldqv=NCLDQV)
-    else:
-        csdfg(**a, **sc, nssopt=np.int64(CONSTS["nssopt"]),
-              KLON=KLON, NCLV=NCLV, NCLDQL=NCLDQL, NCLDQI=NCLDQI, NCLDQV=NCLDQV)
-    return {k: a[k] for k in ("zsolqa", "zsolac", "zqxfg")}
+    csdfg(**sdfg_kwargs(tag, a))
+    return {k: a[k] for k in OUT}
 
 
 def main():

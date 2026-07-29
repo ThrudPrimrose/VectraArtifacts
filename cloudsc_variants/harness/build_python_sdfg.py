@@ -8,6 +8,7 @@ produced by (and therefore guaranteed loadable on) main:
     PYTHONPATH=/home/primrose/Work/dace-main-wt python build_python_sdfg.py ...
 """
 import importlib.util
+import os
 import sys
 import types
 
@@ -19,7 +20,7 @@ import types
 # mpi4py before importing dace; MPIResolver then finds nothing to rewrite.
 if "mpi4py" not in sys.modules:
     _mpi = types.ModuleType("mpi4py.MPI")
-    _mpi.Comm = type("Comm", (), {})        # MPIResolver does isinstance(obj, MPI.Comm)
+    _mpi.Comm = type("Comm", (), {})  # MPIResolver does isinstance(obj, MPI.Comm)
     _mpi.Intracomm = type("Intracomm", (), {})
     _mpi.COMM_WORLD = None
     _mpi.COMM_NULL = None
@@ -31,8 +32,8 @@ if "mpi4py" not in sys.modules:
 import dace
 
 
-def main() -> int:
-    mod_path, func_name, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+def build(mod_path, func_name, out_path):
+    """Trace ``mod_path::func_name`` to an SDFG, save to ``out_path``, return the SDFG."""
     spec = importlib.util.spec_from_file_location("kern", mod_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -40,12 +41,17 @@ def main() -> int:
     sdfg = prog.to_sdfg(simplify=False)
     # Distinct name from the Fortran-frontend SDFG so the two never collide
     # in .dacecache when both are compiled in the same harness.
-    sdfg.name = out_path.split("/")[-1][:-5]
+    sdfg.name = os.path.splitext(os.path.basename(out_path))[0]
     sdfg.save(out_path)
     print(f"[python-frontend] {mod_path}::{func_name} -> {out_path}")
     print(f"  name={sdfg.name}")
     print(f"  arrays={list(sdfg.arrays.keys())}")
     print(f"  symbols={list(sdfg.symbols.keys())}")
+    return sdfg
+
+
+def main() -> int:
+    build(sys.argv[1], sys.argv[2], sys.argv[3])
     return 0
 
 

@@ -19,6 +19,9 @@ import native  # noqa: E402
 
 KLON, NCLV = 4096, 5
 RTOL = 1e-9
+KER = "lu_solver"
+CONSTS = {}  # this kernel takes no scalar physical constants
+OUT = ("zqlhs", "zqxn")
 
 
 def make_inputs():
@@ -33,19 +36,22 @@ def make_inputs():
 
 def numpy_reference(arrays):
     import importlib.util
-    spec = importlib.util.spec_from_file_location("ref", os.path.join(HERE, "lu_solver_numpy.py"))
+    spec = importlib.util.spec_from_file_location("ref", os.path.join(HERE, f"{KER}_numpy.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     a = {k: v.copy() for k, v in arrays.items()}
     mod.lu_solver_microphysics(a["zqlhs"], a["zqxn"], KLON, NCLV)
-    return {"zqlhs": a["zqlhs"], "zqxn": a["zqxn"]}
+    return {k: a[k] for k in OUT}
 
 
-def run_original_fortran(arrays):
-    so = os.path.join(HERE, "liblu_solver_orig.so")
+def run_original_fortran(arrays, timer_out=None):
+    so = os.path.join(HERE, f"lib{KER}_orig.so")
     if not os.path.exists(so):
-        subprocess.run(["gfortran", "-O3", "-fPIC", "-shared", "-ffast-math", "-fno-math-errno",
-                        os.path.join(HERE, "lu_solver_w_timer.f90"), "-o", so], check=True)
+        subprocess.run([
+            "gfortran", "-O3", "-fPIC", "-shared", "-ffast-math", "-fno-math-errno",
+            os.path.join(HERE, f"{KER}_w_timer.f90"), "-o", so
+        ],
+                       check=True)
     lib = ctypes.CDLL(so)
     fn = lib.lu_solver_microphysics
     fn.restype = None
@@ -55,39 +61,40 @@ def run_original_fortran(arrays):
     fn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, nd3, nd2, nd1]
     zqlhs = np.asfortranarray(arrays["zqlhs"].copy())
     zqxn = np.asfortranarray(arrays["zqxn"].copy())
-    timer = np.zeros(2)
+    timer = timer_out if timer_out is not None else np.zeros(2)
     fn(1, KLON, KLON, NCLV, zqlhs, zqxn, timer)
     return {"zqlhs": zqlhs, "zqxn": zqxn}
 
 
 def run_native(arrays, lang_map, lang):
     so, binding = lang_map[lang]
-    bufs = {"zqlhs": np.ascontiguousarray(arrays["zqlhs"].copy()),
-            "zqxn": np.ascontiguousarray(arrays["zqxn"].copy())}
-    native.call_native(so, binding, dict(KLON=KLON, NCLV=NCLV), bufs)
-    return {"zqlhs": bufs["zqlhs"], "zqxn": bufs["zqxn"]}
+    bufs = {k: np.ascontiguousarray(v.copy()) for k, v in arrays.items()}
+    native.call_native(so, binding, dict(CONSTS, KLON=KLON, NCLV=NCLV), bufs)
+    return {k: bufs[k] for k in OUT}
+
+
+def sdfg_kwargs(tag, a):
+    """Array + symbol kwargs for one compiled-SDFG call; ``a`` holds the live buffers."""
+    if tag == "fortran_frontend":
+        return dict(**a, klon=KLON, nclv=NCLV)
+    return dict(**a, KLON=KLON, NCLV=NCLV)
 
 
 def run_sdfg(tag, arrays, fortran_layout):
     import dace
-    sdfg = dace.SDFG.from_file(os.path.join(HERE, f"lu_solver_{tag}.sdfg"))
+    sdfg = dace.SDFG.from_file(os.path.join(HERE, f"{KER}_{tag}.sdfg"))
     csdfg = sdfg.compile()
     order = "F" if fortran_layout else "C"
-    zqlhs = np.array(arrays["zqlhs"], order=order, copy=True)
-    zqxn = np.array(arrays["zqxn"], order=order, copy=True)
-    if tag == "fortran_frontend":
-        csdfg(zqlhs=zqlhs, zqxn=zqxn, klon=KLON, nclv=NCLV)
-    else:
-        csdfg(zqlhs=zqlhs, zqxn=zqxn, KLON=KLON, NCLV=NCLV)
-    return {"zqlhs": zqlhs, "zqxn": zqxn}
+    a = {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
+    csdfg(**sdfg_kwargs(tag, a))
+    return {k: a[k] for k in OUT}
 
 
 def main():
     arrays = make_inputs()
     ref = numpy_reference(arrays)
     print(f"lu_solver_microphysics  KLON={KLON} NCLV={NCLV}  rtol={RTOL}")
-    lang_map = native.emit_and_compile_native(HERE, "lu_solver", "lu_solver_numpy.py",
-                                              "lu_solver.bench_info.json")
+    lang_map = native.emit_and_compile_native(HERE, KER, f"{KER}_numpy.py", f"{KER}.bench_info.json")
     results = []
     results.append(native.compare("original Fortran (ctypes)", ref, run_original_fortran(arrays), RTOL))
     for lang in ("c", "cpp", "fortran"):
