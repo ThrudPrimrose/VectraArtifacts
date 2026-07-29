@@ -124,38 +124,6 @@ def _source_env(script_path: pathlib.Path) -> dict:
     return env
 
 
-# def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
-#     env = dict(env)
-#     if platform.system() == "Darwin":
-#         if compiler == "clang":
-#             env["CXX"] = "clang++"
-#             env["CXX_COMPILER"] = "clang"
-#             env["DACE_compiler_cpu_executable"] = "clang++"
-#         elif compiler == "gcc":
-#             env["CXX"] = "/opt/homebrew/bin/g++-15"
-#             env["CXX_COMPILER"] = "gcc"
-#             env["DACE_compiler_cpu_executable"] = "/opt/homebrew/bin/g++-15"
-
-
-#     opt_flags = (_COST_MODEL_CXXFLAGS_GCC if compiler == "gcc" else _COST_MODEL_CXXFLAGS).get(cost_model, "")
-#     remark_flags = _VEC_REMARK_FLAGS.get(compiler, "")
-
-#     # Base flags always go first
-#     if compiler == "gcc":
-#         base_and_opt = f"{_BASE_MODEL_GCC} {opt_flags}".strip()
-#     else:
-#         if cost_model == "disabled":
-#             base_and_opt = f"{_BASE_MODEL_CLANG_DISABLED} {opt_flags}".strip()
-#         else:
-#             base_and_opt = f"{_BASE_MODEL_CLANG} {opt_flags}".strip()
-
-#     if base_and_opt:
-#         env["CXXFLAGS"] = f"{base_and_opt} {env.get('CXXFLAGS', '')}".strip()
-#     if remark_flags:
-#         env["CXXFLAGS"] = f"{env.get('CXXFLAGS', '')} {remark_flags}".strip()
-#         env["DACE_compiler_cpu_args"] = f"{env.get('DACE_compiler_cpu_args', '')} {_strip_mllvm_flags(base_and_opt)} {remark_flags}".strip()
-#     return env
-
 def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
     env = dict(env)
     if platform.system() == "Darwin":
@@ -235,46 +203,6 @@ def collect_texts(run_dir: pathlib.Path, proc: subprocess.CompletedProcess | Non
 
 
 _LOC_RE = re.compile(r"^([^:]+):(\d+):(\d+)")
-
-
-# def _count_unique_locations(lines: list[str], kernel_cpp: str | None = None) -> int:
-#     """Count distinct file:line:col locations in a list of remark lines.
-
-#     If kernel_cpp is given, only count locations whose file path ends with
-#     that basename — this excludes dacestub.cpp and other DaCe runtime files
-#     that are compiled in the same make invocation."""
-#     locs: set[str] = set()
-#     for s in lines:
-#         m = _LOC_RE.match(s)
-#         if not m:
-#             continue
-#         filepath = m.group(1)
-#         if kernel_cpp and not filepath.endswith(kernel_cpp):
-#             continue
-#         locs.add(m.group())
-#     return len(locs)
-
-
-# def summarize_vectorization(text: str, kernel_cpp: str | None = None) -> tuple[str, list[str], int, int]:
-#     hits, misses, why = [], [], []
-#     for line in text.splitlines():
-#         s = line.strip()
-#         if not s:
-#             continue
-#         if VEC_HIT_RE.search(s):
-#             hits.append(s)
-#         if VEC_MISS_RE.search(s):
-#             misses.append(s)
-#         elif WHY_RE.search(s):
-#             why.append(s)
-#     vec_count = _count_unique_locations(hits, kernel_cpp)
-#     miss_count = _count_unique_locations(misses, kernel_cpp)
-#     if hits:
-#         return "yes", (hits + misses + why)[:12], vec_count, miss_count
-#     if misses:
-#         return "no", (misses + why)[:12], vec_count, miss_count
-#     return "unknown", ([*why][:12] or ["No explicit vectorization remark found."]), 0, 0
-
 
 def _count_unique_locations(lines: list[str], kernel_cpp: str | None = None) -> int:
     locs: set[str] = set()

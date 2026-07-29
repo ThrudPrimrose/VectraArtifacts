@@ -35,24 +35,23 @@ _FORTRAN_COMPILER_CANDIDATES = {
 
 _FORTRAN_OPT_FLAGS = {
     "disabled":  "-O0 -march=native -fno-vectorize",
-    "default":   "-O3 -march=native",
+    "default":   "-O3 -march=native -fvectorize",
     "unlimited": "-O3 -march=native",
-    "cheap":     "-O3 -march=native",
 }
 
 _FORTRAN_OPT_FLAGS_GCC = {
     "disabled":  "-O3 -march=native -fno-tree-vectorize",
     "cheap":     "-O3 -march=native -fvect-cost-model=cheap",
-    "default":   "-O3 -march=native",
+    "default":   "-O3 -march=native -fvect-cost-model=dynamic",
     "unlimited": "-O3 -march=native -fno-vect-cost-model",
 }
 
 # Default values for unresolved CloudSC symbolic dimensions so make_inputs()
 # can allocate arrays without crashing on dace.symbol objects.
 _DEFAULT_SYMBOL_VALS = {
-    "klon": 4096, "klev": 60, "nclv": 5,
+    "klon": 4194304, "klev": 6000, "nclv": 5,
     "ncldql": 1, "ncldqi": 2, "ncldqr": 3, "ncldqs": 4, "ncldqv": 5,
-    "kidia": 1, "kfdia": 4096,
+    "kidia": 1, "kfdia": 4194304,
 }
 
 
@@ -259,31 +258,67 @@ def time_sdfg(
     build_folder.mkdir(parents=True, exist_ok=True)
 
     driver = out_dir / "timing_driver.py"
+    # driver.write_text(
+    # "import json, pathlib, sys\n"
+    # "import numpy as np\n"
+    # "import dace\n"
+    # "sys.path.insert(0, r'" + str(pathlib.Path(__file__).resolve().parent) + "')\n"
+    # f"from {_THIS_MODULE} import make_inputs\n"
+    # "from timer_module import InstrumentWithTimer\n"
+    # f"sdfg = dace.SDFG.from_file(r'{str(sdfg_path)}')\n"
+    # "sdfg.build_folder = str(pathlib.Path(r'" + str(build_folder) + "'))\n"
+    # "result_name = InstrumentWithTimer().apply_pass(sdfg, {})\n"
+    # "csdfg = sdfg.compile()\n"
+    # "args = make_inputs(sdfg)\n"
+    # f"warmup = {warmup}\n"
+    # f"repeats = {repeats}\n"
+    # "args['time_ns'] = np.zeros(1, dtype=np.int64)\n"
+    # "for _ in range(warmup):\n"
+    # "    csdfg(**args)\n"
+    # "times = []\n"
+    # "for _ in range(repeats):\n"
+    # "    csdfg(**args)\n"
+    # "    print('checksum:', float(np.sum(args['zsnowaut'])), file=sys.stderr)\n"
+    # "    times.append(int(args['time_ns'][0]))\n"
+    # # "print(json.dumps(times))\n"
+    # "print(times)\n"
+    # )
+
     driver.write_text(
         "import json, pathlib, sys\n"
         "import numpy as np\n"
         "import dace\n"
+
+        "import time\n"
+
         "sys.path.insert(0, r'" + str(pathlib.Path(__file__).resolve().parent) + "')\n"
         f"from {_THIS_MODULE} import make_inputs\n"
+        "from timer_module import InstrumentWithTimer\n"
         f"sdfg = dace.SDFG.from_file(r'{str(sdfg_path)}')\n"
         "sdfg.build_folder = str(pathlib.Path(r'" + str(build_folder) + "'))\n"
-        # InstrumentationType.Timer injects std::chrono into the generated C++
-        # around each top-level SDFG state — no Python overhead on the hot path.
-        "sdfg.instrument = dace.dtypes.InstrumentationType.Timer\n"
+        "result_name = InstrumentWithTimer().apply_pass(sdfg, {})\n"
         "csdfg = sdfg.compile()\n"
         "args = make_inputs(sdfg)\n"
         f"warmup = {warmup}\n"
         f"repeats = {repeats}\n"
+        "args['time_ns'] = np.zeros(1, dtype=np.int64)\n"
         "for _ in range(warmup):\n"
         "    csdfg(**args)\n"
         "times = []\n"
+
+        "t0 = time.perf_counter_ns()\n"
+
         "for _ in range(repeats):\n"
         "    csdfg(**args)\n"
-        "    report = sdfg.get_latest_report()\n"
-        # report.events[0].duration is in microseconds; convert to seconds
-        # for consistency with format_timing_block (* 1e3 → ms).
-        "    times.append(report.events[0].duration * 1e-6)\n"
-        "print(json.dumps(times))\n"
+        "    times.append(int(args['time_ns'][0]))\n"
+        # "print(json.dumps(times))\n"
+
+        "t1 = time.perf_counter_ns()\n"
+        "total_ns = t1 - t0\n"
+        "avg_ns_per_call = total_ns / repeats\n"
+        "print(f'avg_ns_per_call: {avg_ns_per_call}', file=sys.stderr)\n"
+
+        "print(times)\n"
     )
 
     proc = subprocess.run(
@@ -312,7 +347,43 @@ def time_sdfg(
     }
 
 
+# def format_timing_block(cell: str, result: dict, label: str = "") -> list[str]:
+#     #comes in as nanoseconds
+#     header = f"=== {cell} ===" if not label else f"--- {label} [{cell}] ---"
+#     lines = ["", header]
+#     if "error" in result:
+#         lines.append(f"ERROR: {result['error']}")
+#         return lines
+#     lines.extend([
+#         f"Runs: {len(result['runs'])}",
+#         f"Min:    {result['min'] / 1.0e3:.3f} us",
+#         f"Median: {result['median'] / 1.0e3:.3f} us",
+#         f"Mean:   {result['mean'] / 1.0e3:.3f} us",
+#         f"Max:    {result['max'] / 1.0e3:.3f} us",
+#         f"Stdev:  {result['stdev'] / 1.0e3:.3f} us",
+#     ])
+#     return lines
+
+
+# def format_timing_block_sdfg(cell: str, result: dict, label: str = "") -> list[str]:
+#     #comes in as nanoseconds
+#     header = f"=== {cell} ===" if not label else f"--- {label} [{cell}] ---"
+#     lines = ["", header]
+#     if "error" in result:
+#         lines.append(f"ERROR: {result['error']}")
+#         return lines
+#     lines.extend([
+#         f"Runs: {len(result['runs'])}",
+#         f"Min:    {result['min'] :.3f} us",
+#         f"Median: {result['median'] :.3f} us",
+#         f"Mean:   {result['mean'] :.3f} us",
+#         f"Max:    {result['max'] :.3f} us",
+#         f"Stdev:  {result['stdev'] :.3f} us",
+#     ])
+#     return lines
+
 def format_timing_block(cell: str, result: dict, label: str = "") -> list[str]:
+    #comes in as nanoseconds
     header = f"=== {cell} ===" if not label else f"--- {label} [{cell}] ---"
     lines = ["", header]
     if "error" in result:
@@ -320,14 +391,31 @@ def format_timing_block(cell: str, result: dict, label: str = "") -> list[str]:
         return lines
     lines.extend([
         f"Runs: {len(result['runs'])}",
-        f"Min:    {result['min'] * 1e3:.4f} ms",
-        f"Median: {result['median'] * 1e3:.4f} ms",
-        f"Mean:   {result['mean'] * 1e3:.4f} ms",
-        f"Max:    {result['max'] * 1e3:.4f} ms",
-        f"Stdev:  {result['stdev'] * 1e3:.4f} ms",
+        f"Min:    {result['min']} ns",
+        f"Median: {result['median']} ns",
+        f"Mean:   {result['mean']} ns",
+        f"Max:    {result['max']} ns",
+        f"Stdev:  {result['stdev']} ns",
     ])
     return lines
 
+
+def format_timing_block_sdfg(cell: str, result: dict, label: str = "") -> list[str]:
+    #comes in as nanoseconds
+    header = f"=== {cell} ===" if not label else f"--- {label} [{cell}] ---"
+    lines = ["", header]
+    if "error" in result:
+        lines.append(f"ERROR: {result['error']}")
+        return lines
+    lines.extend([
+        f"Runs: {len(result['runs'])}",
+        f"Min:    {result['min']} ns",
+        f"Median: {result['median']} ns",
+        f"Mean:   {result['mean']} ns",
+        f"Max:    {result['max']} ns",
+        f"Stdev:  {result['stdev']} ns",
+    ])
+    return lines
 
 # ---------------------------------------------------------------------------
 # Fortran baseline timing via _w_timer.f90
@@ -446,7 +534,7 @@ def time_fortran(
     # inside _w_timer.f90.  Skip warmup lines (they appear first); take the
     # last `repeats` occurrences.
     import re
-    elapsed_re = re.compile(r"Elapsed time \(seconds\):\s*([\d.eE+\-]+)")
+    elapsed_re = re.compile(r"Elapsed time \(nanoseconds\):\s*([\d.]+)")
     all_times = [float(m.group(1)) for m in elapsed_re.finditer(proc.stdout)]
     # Warmup calls also print — discard the leading warmup entries.
     times = all_times[-repeats:] if len(all_times) >= repeats else all_times
@@ -495,6 +583,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     print(f"Found {len(sdfgs)} SDFG files under {root}")
 
     for bench_name, bench_dir, sdfg_path in sdfgs:
+        print(f"Bench name: [{bench_name}], bench dir:({bench_dir}) , path:{sdfg_path}\n")
         vec_reports_dir = bench_dir / "vec_reports" / sdfg_path.stem
         cells = discovered_cells(vec_reports_dir)
         if not cells:
@@ -522,7 +611,7 @@ def main(argv: Iterable[str] | None = None) -> int:
 
             # timing.txt next to this cell's summary.txt
             timing_lines = [f"Benchmark: {bench_name}", f"Cell: {cell}"]
-            timing_lines.extend(format_timing_block(cell, result))
+            timing_lines.extend(format_timing_block_sdfg(cell, result))
 
             # ── Fortran baseline timing ──────────────────────────────────────
             if not args.no_fortran:

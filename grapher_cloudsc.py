@@ -1,13 +1,22 @@
 import re, json, os
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 ROOT = "cloudsc_variants"
 SKIP_DIRS = {"harness"}
 COST_MODEL_ORDER = ["cheap", "default", "unlimited", "disabled"]
 COMPILER_ORDER = ["clang", "gcc"]
 FRONTEND_ORDER = ["python", "fortran", "f90"]
+CPU_ORDER = ["amd_epyc", "amd_epyc_genoa", "arm_grace", "apple_m_series",
+             "fugaku_a64fx", "ibm_power", "intel_xeon"]
 COLOR_MAP = {"clang": "#4C78A8", "gcc": "#F58518", "f90": "#26EB47"}
+
+# Matches e.g. clang_amd_epyc_default, gcc_arm_grace_cheap, clang_amd_epyc_genoa_unlimited
+CELL_RE = re.compile(
+    r'^(clang|gcc|icpx)_(.+)_(cheap|default|unlimited|disabled)$'
+)
+
 
 def parse_report(text, frontend_label):
     rows = []
@@ -18,28 +27,31 @@ def parse_report(text, frontend_label):
             continue
         kernel = kmatch.group(1)
         sections = re.split(r'\n(?===+ \S+ ===+)', kblock)
-        clang_total = None
+        clang_totals = {}
         entries = []
         for sec in sections:
             hmatch = re.search(r'===+\s*(\S+)\s*===+', sec)
             if not hmatch:
                 continue
             name = hmatch.group(1)
-            m = re.match(r'(clang|gcc)_.*_(cheap|default|unlimited|disabled)$', name)
+            m = CELL_RE.match(name)
             if not m:
                 continue
-            compiler, cost_model = m.group(1), m.group(2)
+            compiler, cpu, cost_model = m.group(1), m.group(2), m.group(3)
             lc = re.search(r'Loop counts:\s*(\d+)/(\d+)\s*loops vectorized', sec)
             vec, tot = (int(lc.group(1)), int(lc.group(2))) if lc else (0, None)
-            entries.append((compiler, cost_model, vec, tot))
+            entries.append((compiler, cpu, cost_model, vec, tot))
             if compiler == 'clang' and tot is not None:
-                clang_total = tot if clang_total is None else max(clang_total, tot)
-        if clang_total is None:
+                clang_totals[cpu] = tot if cpu not in clang_totals else max(clang_totals[cpu], tot)
+        if not clang_totals:
             continue
-        for compiler, cost_model, vec, tot in entries:
+        for compiler, cpu, cost_model, vec, tot in entries:
+            total_for_cpu = clang_totals.get(cpu, max(clang_totals.values()))
             rows.append({'kernel': kernel, 'frontend': frontend_label, 'compiler': compiler,
-                          'cost_model': cost_model, 'vectorized': vec, 'total_loops': clang_total})
+                          'cpu': cpu, 'cost_model': cost_model, 'vectorized': vec,
+                          'total_loops': total_for_cpu})
     return rows
+
 
 def parse_fortran_baseline(text):
     """Extract embedded '--- Fortran baseline ---' sections from a report file."""
@@ -56,15 +68,16 @@ def parse_fortran_baseline(text):
             if not cell_m:
                 continue
             cell = cell_m.group(1)
-            cm_match = re.match(r'(clang|gcc|icpx)_.*_(cheap|default|unlimited|disabled)$', cell)
-            if not cm_match:
+            m = CELL_RE.match(cell)
+            if not m:
                 continue
-            compiler, cost_model = cm_match.group(1), cm_match.group(2)
+            compiler, cpu, cost_model = m.group(1), m.group(2), m.group(3)
             lc = re.search(r'Loop counts:\s*(\d+)/(\d+)\s*loops vectorized', sec)
             vec = int(lc.group(1)) if lc else 0
             rows.append({'kernel': kernel, 'frontend': 'f90', 'compiler': compiler,
-                         'cost_model': cost_model, 'vectorized': vec, 'total_loops': None})
+                         'cpu': cpu, 'cost_model': cost_model, 'vectorized': vec, 'total_loops': None})
     return rows
+
 
 def collect_all_reports(root=ROOT):
     all_rows = []
@@ -86,56 +99,83 @@ def collect_all_reports(root=ROOT):
                     fort_loaded = True
             else:
                 print(f"Warning: missing {fpath}")
-    # Back-fill total_loops for f90 rows using the kernel-level max from SDFG rows
     df = pd.DataFrame(all_rows)
+    # Back-fill total_loops for f90 rows using kernel+cpu-level max from SDFG rows
     if not df.empty and 'f90' in df['frontend'].values:
-        kernel_totals = df[df['frontend'] != 'f90'].groupby('kernel')['total_loops'].max()
+        kernel_cpu_totals = (
+            df[df['frontend'] != 'f90']
+            .groupby(['kernel', 'cpu'])['total_loops'].max()
+        )
         mask = df['frontend'] == 'f90'
-        df.loc[mask, 'total_loops'] = df.loc[mask, 'kernel'].map(kernel_totals)
+        df.loc[mask, 'total_loops'] = df.loc[mask].apply(
+            lambda r: kernel_cpu_totals.get((r['kernel'], r['cpu']), None), axis=1
+        )
     return df
+
 
 def make_kernel_chart(df, kernel, output_dir="output"):
     os.makedirs(output_dir, exist_ok=True)
     sub = df[df['kernel'] == kernel].copy()
     if sub.empty:
         return None
-    total_loops = sub['total_loops'].max()
 
-    x_labels, y_vals, colors = [], [], []
-    for fe in FRONTEND_ORDER:
-        for compiler in COMPILER_ORDER:
-            for cm in COST_MODEL_ORDER:
-                row = sub[(sub['frontend']==fe)&(sub['compiler']==compiler)&(sub['cost_model']==cm)]
-                x_labels.append(f"{fe[:2].upper()}_{compiler}_{cm}")
-                y_vals.append(int(row['vectorized'].values[0]) if not row.empty else 0)
-                # f90 bars get their own colour; SDFG bars use the compiler colour
-                colors.append(COLOR_MAP["f90"] if fe == "f90" else COLOR_MAP[compiler])
+    cpus_present = [c for c in CPU_ORDER if c in sub['cpu'].unique()]
+    if not cpus_present:
+        cpus_present = sorted(sub['cpu'].unique())
 
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=x_labels, y=y_vals, marker_color=colors,
-                          text=[str(v) for v in y_vals], textposition='outside', width=0.6))
-    fig.add_hline(y=total_loops, line_dash="dash", line_color="gray",
-                  annotation_text=f"Total = {total_loops}", annotation_position="top left")
-    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["clang"], textposition='outside', name="Clang"))
-    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["gcc"],   textposition='outside', name="GCC"))
-    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["f90"],   textposition='outside', name="Fortran baseline"))
+    n = len(cpus_present)
+    fig = make_subplots(rows=1, cols=n, subplot_titles=cpus_present,
+                         shared_yaxes=True, horizontal_spacing=0.04)
+
+    global_max_total = sub['total_loops'].max()
+
+    for col_idx, cpu in enumerate(cpus_present, start=1):
+        cpu_sub = sub[sub['cpu'] == cpu]
+        total_loops = cpu_sub['total_loops'].max()
+
+        x_labels, y_vals, colors = [], [], []
+        for fe in FRONTEND_ORDER:
+            for compiler in COMPILER_ORDER:
+                for cm in COST_MODEL_ORDER:
+                    row = cpu_sub[(cpu_sub['frontend']==fe)&(cpu_sub['compiler']==compiler)&(cpu_sub['cost_model']==cm)]
+                    x_labels.append(f"{fe[:2].upper()}_{compiler}_{cm}")
+                    y_vals.append(int(row['vectorized'].values[0]) if not row.empty else 0)
+                    colors.append(COLOR_MAP["f90"] if fe == "f90" else COLOR_MAP[compiler])
+
+        fig.add_trace(
+            go.Bar(x=x_labels, y=y_vals, marker_color=colors,
+                   text=[str(v) for v in y_vals], textposition='outside', width=0.6,
+                   showlegend=False),
+            row=1, col=col_idx
+        )
+        if pd.notna(total_loops):
+            fig.add_hline(y=total_loops, line_dash="dash", line_color="gray",
+                          annotation_text=f"Total = {int(total_loops)}",
+                          annotation_position="top left",
+                          row=1, col=col_idx)
+
+    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["clang"], name="Clang"), row=1, col=1)
+    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["gcc"],   name="GCC"), row=1, col=1)
+    fig.add_trace(go.Bar(x=[None], y=[None], marker_color=COLOR_MAP["f90"],   name="Fortran baseline"), row=1, col=1)
 
     fig.update_layout(
-        title={"text": f"Loops Vectorized — {kernel}<br>"
-                        "<span style='font-size: 18px; font-weight: normal;'>"},
-        legend=dict(orientation='h', yanchor='bottom', y=1.05, xanchor='center', x=0.5),
-        bargap=0.25
+        title={"text": f"Loops Vectorized — {kernel} (by CPU architecture)"},
+        legend=dict(orientation='h', yanchor='bottom', y=1.08, xanchor='center', x=0.5),
+        bargap=0.25,
+        width=max(900, 700 * n),
+        height=750,
     )
-    fig.update_xaxes(title_text="Frontend_Compiler_CostModel", tickangle=-45, type='category')
-    fig.update_yaxes(title_text="Loops vectorized", range=[0, total_loops*1.2])
+    fig.update_xaxes(tickangle=-45, type='category')
+    fig.update_yaxes(title_text="Loops vectorized", range=[0, global_max_total*1.2 if pd.notna(global_max_total) else 1], col=1)
     fig.update_traces(cliponaxis=False)
 
     out_name = os.path.join(output_dir, f"vectorization_{kernel}.png")
-    fig.write_image(out_name, width=1800, height=700)
+    fig.write_image(out_name, width=fig.layout.width, height=fig.layout.height)
     with open(out_name + ".meta.json", "w") as f:
         json.dump({"caption": f"Raw loops vectorized — {kernel}",
-                    "description": f"24-category column chart of vectorized loop counts by frontend (python/fortran/f90), compiler, cost model for {kernel}."}, f)
+                    "description": f"Column charts of vectorized loop counts by frontend/compiler/cost-model, faceted by CPU architecture ({', '.join(cpus_present)}) for {kernel}."}, f)
     return out_name
+
 
 df = collect_all_reports(ROOT)
 for kernel in df['kernel'].unique():
