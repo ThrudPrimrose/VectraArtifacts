@@ -1,0 +1,17 @@
+{
+  "func_name": "lu_solver_microphysics",
+  "short_name": "lu_solver",
+  "input_args": ["zqlhs", "zqxn", "KLON", "NCLV"],
+  "array_args": ["zqlhs", "zqxn"],
+  "output_args": ["zqlhs", "zqxn"],
+  "init": {
+    "shapes": {
+      "zqlhs": "(KLON,NCLV,NCLV)",
+      "zqxn": "(KLON,NCLV)"
+    },
+    "dtypes": {"zqlhs": "float64", "zqxn": "float64"}
+  },
+  "parameters": {
+    "S": {"KLON": 4096, "NCLV": 5}
+  }
+}

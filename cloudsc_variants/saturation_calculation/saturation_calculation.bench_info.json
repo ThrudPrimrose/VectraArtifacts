@@ -1,0 +1,30 @@
+{
+  "func_name": "compute_saturation_values",
+  "short_name": "saturation_calculation",
+  "input_args": ["ztp1", "pap", "zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice",
+                 "zfoeeliqt", "zqsliq",
+                 "rtt", "retv", "r2es", "r3les", "r3ies", "r4les", "r4ies", "rtice", "rtwat",
+                 "rtwat_rtice_r", "KLON", "KLEV"],
+  "array_args": ["ztp1", "pap", "zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice",
+                 "zfoeeliqt", "zqsliq"],
+  "output_args": ["zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice", "zfoeeliqt", "zqsliq"],
+  "init": {
+    "shapes": {
+      "ztp1": "(KLON,KLEV)", "pap": "(KLON,KLEV)", "zfoealfa": "(KLON,KLEV)",
+      "zfoeewmt": "(KLON,KLEV)", "zqsmix": "(KLON,KLEV)", "zfoeew": "(KLON,KLEV)",
+      "zqsice": "(KLON,KLEV)", "zfoeeliqt": "(KLON,KLEV)", "zqsliq": "(KLON,KLEV)"
+    },
+    "dtypes": {
+      "ztp1": "float64", "pap": "float64", "zfoealfa": "float64", "zfoeewmt": "float64",
+      "zqsmix": "float64", "zfoeew": "float64", "zqsice": "float64",
+      "zfoeeliqt": "float64", "zqsliq": "float64"
+    },
+    "scalars": {
+      "rtt": 273.16, "retv": 0.608, "r2es": 611.21, "r3les": 17.502, "r3ies": 22.587,
+      "r4les": 32.19, "r4ies": -0.7, "rtice": 250.16, "rtwat": 273.16, "rtwat_rtice_r": 0.0434782609
+    }
+  },
+  "parameters": {
+    "S": {"KLON": 512, "KLEV": 32}
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "func_name": "autoconversion_snow",
+  "short_name": "autoconversion_snow",
+  "input_args": ["ztp1", "zicecld", "pnice", "zsolqb", "zsnowaut",
+                 "rtt", "rlcritsnow", "rsnowlin1", "rsnowlin2", "rnice",
+                 "ptsphy", "zepsec", "laericeauto", "KLON", "NCLDQS", "NCLDQI"],
+  "array_args": ["ztp1", "zicecld", "pnice", "zsolqb", "zsnowaut"],
+  "output_args": ["zsnowaut", "zsolqb"],
+  "init": {
+    "shapes": {
+      "ztp1": "(KLON,)",
+      "zicecld": "(KLON,)",
+      "pnice": "(KLON,)",
+      "zsnowaut": "(KLON,)",
+      "zsolqb": "(KLON,NCLDQS,NCLDQI)"
+    },
+    "dtypes": {
+      "ztp1": "float64", "zicecld": "float64", "pnice": "float64",
+      "zsnowaut": "float64", "zsolqb": "float64"
+    },
+    "scalars": {
+      "rtt": 273.16, "rlcritsnow": 1e-4, "rsnowlin1": 1e-3, "rsnowlin2": 0.05,
+      "rnice": 1e7, "ptsphy": 2.0, "zepsec": 1e-12, "laericeauto": 1
+    }
+  },
+  "parameters": {
+    "S": {"KLON": 8192, "NCLDQS": 4, "NCLDQI": 2}
+  }
+}

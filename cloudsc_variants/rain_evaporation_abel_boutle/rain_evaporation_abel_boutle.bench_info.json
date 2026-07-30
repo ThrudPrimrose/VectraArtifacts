@@ -1,0 +1,37 @@
+{
+  "func_name": "rain_evaporation_abel_boutle",
+  "short_name": "rain_evaporation_abel_boutle",
+  "input_args": ["ztp1", "zqx_ncldqv", "za", "zqsliq", "zqxfg_ncldqr", "zcovptot",
+                 "zcovpclr", "zcovpmax", "zrho", "pap", "zsolqa", "zevap_out",
+                 "rtt", "rv", "rd", "rprecrhmax", "rcovpmin", "rdensref", "ptsphy", "zepsec",
+                 "rcl_fac1", "rcl_fac2", "rcl_cdenom1", "rcl_cdenom2", "rcl_cdenom3",
+                 "rcl_ka273", "rcl_const1r", "rcl_const2r", "rcl_const3r", "rcl_const4r",
+                 "KLON", "NCLV", "NCLDQV", "NCLDQR"],
+  "array_args": ["ztp1", "zqx_ncldqv", "za", "zqsliq", "zqxfg_ncldqr", "zcovptot",
+                 "zcovpclr", "zcovpmax", "zrho", "pap", "zsolqa", "zevap_out"],
+  "output_args": ["zqxfg_ncldqr", "zcovptot", "zsolqa", "zevap_out"],
+  "init": {
+    "shapes": {
+      "ztp1": "(KLON,)", "zqx_ncldqv": "(KLON,)", "za": "(KLON,)", "zqsliq": "(KLON,)",
+      "zqxfg_ncldqr": "(KLON,)", "zcovptot": "(KLON,)", "zcovpclr": "(KLON,)",
+      "zcovpmax": "(KLON,)", "zrho": "(KLON,)", "pap": "(KLON,)",
+      "zsolqa": "(KLON,NCLV,NCLV)", "zevap_out": "(KLON,)"
+    },
+    "dtypes": {
+      "ztp1": "float64", "zqx_ncldqv": "float64", "za": "float64", "zqsliq": "float64",
+      "zqxfg_ncldqr": "float64", "zcovptot": "float64", "zcovpclr": "float64",
+      "zcovpmax": "float64", "zrho": "float64", "pap": "float64",
+      "zsolqa": "float64", "zevap_out": "float64"
+    },
+    "scalars": {
+      "rtt": 273.16, "rv": 461.5, "rd": 287.0, "rprecrhmax": 0.7, "rcovpmin": 0.1,
+      "rdensref": 1.0, "ptsphy": 2.0, "zepsec": 1e-12,
+      "rcl_fac1": 5.0, "rcl_fac2": 0.5, "rcl_cdenom1": 1.0, "rcl_cdenom2": 1e-3,
+      "rcl_cdenom3": 1e-6, "rcl_ka273": 0.024, "rcl_const1r": 1.0, "rcl_const2r": 0.31,
+      "rcl_const3r": 0.5, "rcl_const4r": 0.5
+    }
+  },
+  "parameters": {
+    "S": {"KLON": 4096, "NCLV": 5, "NCLDQV": 5, "NCLDQR": 3}
+  }
+}
