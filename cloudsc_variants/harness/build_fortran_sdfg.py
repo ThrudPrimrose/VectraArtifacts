@@ -12,29 +12,36 @@ We feed the NON-bind(C), no-timer variant here -- the SDFG frontend wants
 the plain Fortran procedure, while the bind(C)+timer variant is reserved
 for the ctypes call in the numerical-correctness harness.
 """
+import os
 import sys
+
 import dace_fortran
 
 
-def main() -> int:
-    src_path, out_path = sys.argv[1], sys.argv[2]
-    entry = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "-" else None
+def build(src_path, out_path, entry=None):
+    """Lower ``src_path`` through dace-fortran, save to ``out_path``, return the SDFG."""
     src = open(src_path).read()
-    sdfg = dace_fortran.build_sdfg(src, entry=entry, name=out_path.split("/")[-1][:-5])
+    # Distinct name from the Python-frontend SDFG (the Fortran subroutine name would
+    # otherwise clash with the @dace.program name) so both compile without a cache collision.
+    name = os.path.splitext(os.path.basename(out_path))[0]
+    sdfg = dace_fortran.build_sdfg(src, entry=entry, name=name)
     # The new (FaCe) Fortran frontend emits library nodes (e.g. Memset/Copy)
     # that the old `main`-branch codegen cannot lower. Expand them here --
     # in the py13/FaCe env where those nodes' expansions are registered --
     # so the saved SDFG is plain maps/tasklets that main can codegen too.
     sdfg.expand_library_nodes()
-    # Distinct name from the Python-frontend SDFG (the Fortran subroutine name
-    # would otherwise clash with the @dace.program name) so both can be
-    # compiled side by side without a .dacecache collision.
-    sdfg.name = out_path.split("/")[-1][:-5]
+    sdfg.name = name
     sdfg.save(out_path)
     print(f"[fortran-frontend] {src_path} -> {out_path}")
     print(f"  name={sdfg.name}")
     print(f"  arrays={list(sdfg.arrays.keys())}")
     print(f"  symbols={list(sdfg.symbols.keys())}")
+    return sdfg
+
+
+def main() -> int:
+    entry = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != "-" else None
+    build(sys.argv[1], sys.argv[2], entry)
     return 0
 
 
