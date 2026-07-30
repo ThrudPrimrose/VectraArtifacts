@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "harness"))
 import native  # noqa: E402
 
-KLON, KLEV = 512, 32
+KLON, KLEV = 8388608, 32
 RTOL = 1e-9
 KER = "saturation_calculation"
 CONSTS = dict(rtt=273.16,
