@@ -134,7 +134,7 @@ def generate_ice_supersaturation_data() -> Dict[str, np.ndarray]:
     rtt      = np.float64(273.16)
     ramin    = np.float64(1e-3)      # min clear fraction
     rthomo   = np.float64(233.16)    # homogenous freezing threshold
-    nssopt   = np.int64(1)           # activate Koop scheme
+    nssopt   = np.int32(1)           # activate Koop scheme
     rkooptau = np.float64(60.0)     # characteristic timescale [s]
     ptsphy   = np.float64(2.0)       # timestep [s]
     zepsec   = np.float64(1e-12)
@@ -241,7 +241,7 @@ def compile_ice_supersaturation_fortran(
         ctypes.c_double,  # RTT
         ctypes.c_double,  # RAMIN
         ctypes.c_double,  # RTHOMO
-        ctypes.c_double,     # NSSOPT
+        ctypes.c_int,     # NSSOPT
         ctypes.c_double,  # RKOOPTAU
         ctypes.c_double,  # PTSPHY
         ctypes.c_double,  # ZEPSEC
