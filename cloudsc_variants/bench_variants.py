@@ -38,6 +38,9 @@ Run under pyenv py13 with the FaCe branch on PYTHONPATH (see run_all.sh):
 
     PYTHONPATH=/home/primrose/Work/d-face:/home/primrose/Work/dace-fortran \
         python bench_variants.py [--only <variant>] [--reps N] [--frontend ...]
+
+``--check-ub`` swaps the timing run for a memory-safety run over the same native code --
+clang-tidy, gcc -fanalyzer and ASan+UBSan on both lanes. See ``harness/ubcheck.py``.
 """
 import argparse
 import importlib.util
@@ -212,10 +215,17 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=50, help="timed repetitions per lane (default 50)")
     ap.add_argument("--frontend", choices=("fortran", "python", "both"), default="both")
     ap.add_argument("--skip-regen", action="store_true", help="reuse the checked-in SDFGs instead of regenerating")
+    ap.add_argument("--check-ub",
+                    action="store_true",
+                    help="do not time: run clang-tidy, gcc -fanalyzer and ASan+UBSan over both lanes' native code")
     args = ap.parse_args()
 
     variants = (args.only, ) if args.only else regen_sdfgs.VARIANTS
     frontends = ("fortran", "python") if args.frontend == "both" else (args.frontend, )
+
+    if args.check_ub:
+        import ubcheck  # deferred so the timing path never pays for it
+        return ubcheck.run(HERE, variants, frontends, args.reps, not args.skip_regen)
 
     results, allok = [], True
     for variant in variants:
