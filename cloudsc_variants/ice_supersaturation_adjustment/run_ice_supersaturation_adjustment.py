@@ -95,7 +95,7 @@ def sdfg_kwargs(tag, a):
         return dict(**a,
                     **sc,
                     nssopt=np.int64(CONSTS["nssopt"]),
-                    klon=KLON,
+                    kidia=1, kfdia=KLON, klon=KLON,
                     nclv=NCLV,
                     ncldql=NCLDQL,
                     ncldqi=NCLDQI,

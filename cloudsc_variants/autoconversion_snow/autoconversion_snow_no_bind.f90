@@ -6,10 +6,10 @@ SUBROUTINE autoconversion_snow( KIDIA, KFDIA, KLON, ZTP1, ZICECLD, PNICE, ZSOLQB
   INTEGER(c_int), VALUE :: KIDIA, KFDIA, KLON
   INTEGER(c_int), VALUE :: NCLDQS, NCLDQI
   
-  ! Input arrays (1D over JL = 1..KFDIA)
-  REAL(c_double), INTENT(IN) :: ZTP1(KFDIA)      ! Temperature
-  REAL(c_double), INTENT(IN) :: ZICECLD(KFDIA)   ! Ice cloud water
-  REAL(c_double), INTENT(IN) :: PNICE(KFDIA)     ! Ice number concentration
+  ! Input arrays (extent KLON, active columns KIDIA..KFDIA)
+  REAL(c_double), INTENT(IN) :: ZTP1(KLON)      ! Temperature
+  REAL(c_double), INTENT(IN) :: ZICECLD(KLON)   ! Ice cloud water
+  REAL(c_double), INTENT(IN) :: PNICE(KLON)     ! Ice number concentration
   
   ! Constants (scalars passed by value)
   REAL(c_double), VALUE :: RTT              ! Triple point temperature
@@ -22,8 +22,8 @@ SUBROUTINE autoconversion_snow( KIDIA, KFDIA, KLON, ZTP1, ZICECLD, PNICE, ZSOLQB
   LOGICAL(c_bool), VALUE :: LAERICEAUTO     ! Aerosol-aware ice autoconversion
   
   ! Output arrays
-  REAL(c_double), INTENT(OUT)   :: ZSNOWAUT(KFDIA)                 ! Snow autoconversion
-  REAL(c_double), INTENT(INOUT) :: ZSOLQB(KFDIA, NCLDQS, NCLDQI)   ! Source/sink terms
+  REAL(c_double), INTENT(OUT)   :: ZSNOWAUT(KLON)                 ! Snow autoconversion
+  REAL(c_double), INTENT(INOUT) :: ZSOLQB(KLON, NCLDQS, NCLDQI)   ! Source/sink terms
   
   ! Local variables
   INTEGER(c_int)   :: JL
@@ -33,7 +33,7 @@ SUBROUTINE autoconversion_snow( KIDIA, KFDIA, KLON, ZTP1, ZICECLD, PNICE, ZSOLQB
   ZSNOWAUT(:) = 0.0D0
   
   ! Main computation loop
-  DO JL = 1, KLON
+  DO JL = KIDIA, KFDIA
  
     IF (ZTP1(JL) <= RTT) THEN
       IF (ZICECLD(JL) > ZEPSEC) THEN

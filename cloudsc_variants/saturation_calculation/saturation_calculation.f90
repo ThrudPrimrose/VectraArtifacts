@@ -54,7 +54,7 @@ SUBROUTINE compute_saturation_values(KIDIA, KFDIA, KLON, KLEV, ZTP1, PAP, &
 
   ! Main computation loop
   DO JK = 1, KLEV
-    DO JL = 1, KLON
+    DO JL = KIDIA, KFDIA
       PTARE = ZTP1(JL, JK)
 
       ! --- FOEALFA(PTARE) ---

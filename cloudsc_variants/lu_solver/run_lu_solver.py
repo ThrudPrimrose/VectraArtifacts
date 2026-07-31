@@ -76,7 +76,7 @@ def run_native(arrays, lang_map, lang):
 def sdfg_kwargs(tag, a):
     """Array + symbol kwargs for one compiled-SDFG call; ``a`` holds the live buffers."""
     if tag == "fortran_frontend":
-        return dict(**a, klon=KLON, nclv=NCLV)
+        return dict(**a, kidia=1, kfdia=KLON, klon=KLON, nclv=NCLV)
     return dict(**a, KLON=KLON, NCLV=NCLV)
 
 

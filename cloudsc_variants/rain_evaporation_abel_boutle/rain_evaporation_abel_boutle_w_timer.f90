@@ -70,7 +70,7 @@ SUBROUTINE rain_evaporation_abel_boutle( KIDIA, KFDIA, KLON, &
   ZEVAP_OUT(:) = 0.0D0
 
   ! Main computation loop
-  DO JL = 1, KLON
+  DO JL = KIDIA, KFDIA
 
     ZZRH = RPRECRHMAX + (1.0D0 - RPRECRHMAX) * ZCOVPMAX(JL) / &
            MAX(ZEPSEC, 1.0D0 - ZA(JL))

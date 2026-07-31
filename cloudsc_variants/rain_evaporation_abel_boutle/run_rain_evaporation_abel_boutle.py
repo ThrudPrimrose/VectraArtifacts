@@ -112,7 +112,7 @@ def sdfg_kwargs(tag, a):
     """Array + symbol kwargs for one compiled-SDFG call; ``a`` holds the live buffers."""
     sc = {k: np.float64(CONSTS[k]) for k in CONST_ORDER}
     if tag == "fortran_frontend":
-        return dict(**a, **sc, klon=KLON, nclv=NCLV, ncldqv=NCLDQV, ncldqr=NCLDQR)
+        return dict(**a, **sc, kidia=1, kfdia=KLON, klon=KLON, nclv=NCLV, ncldqv=NCLDQV, ncldqr=NCLDQR)
     return dict(**a, **sc, KLON=KLON, NCLV=NCLV, NCLDQV=NCLDQV, NCLDQR=NCLDQR)
 
 

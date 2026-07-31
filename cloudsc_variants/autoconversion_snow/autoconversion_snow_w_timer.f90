@@ -48,7 +48,7 @@ SUBROUTINE autoconversion_snow( KIDIA, KFDIA, KLON, &
   ZSNOWAUT(:) = 0.0D0
   
   ! Main computation loop
-  DO JL = 1, KLON
+  DO JL = KIDIA, KFDIA
  
     IF (ZTP1(JL) <= RTT) THEN
       IF (ZICECLD(JL) > ZEPSEC) THEN

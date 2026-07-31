@@ -126,6 +126,7 @@ def sdfg_kwargs(tag, a):
         return dict(**a,
                     **sc,
                     laericeauto=np.bool_(CONSTS["laericeauto"] != 0),
+                    kidia=1,
                     kfdia=KLON,
                     klon=KLON,
                     ncldqi=NCLDQI,

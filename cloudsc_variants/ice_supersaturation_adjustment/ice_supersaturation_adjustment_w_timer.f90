@@ -46,7 +46,7 @@ SUBROUTINE ice_supersaturation_adjustment( KIDIA, KFDIA, KLON, &
 
   ZEPSILON = 1.0D-14
 
-  DO JL = 1, KLON
+  DO JL = KIDIA, KFDIA
 
     IF (ZTP1(JL) >= RTT .OR. NSSOPT == 0_c_int) THEN
       ZFAC  = 1.0D0

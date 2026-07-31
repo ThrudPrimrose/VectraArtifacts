@@ -16,13 +16,13 @@ SUBROUTINE lu_solver_microphysics( KIDIA, KFDIA, KLON, NCLV, ZQLHS, ZQXN) BIND(C
   DO JN = 1, NCLV - 1  ! 0
     DO JM = JN + 1, NCLV ! 1
 
-      DO JL = 1, KLON
+      DO JL = KIDIA, KFDIA
         ZQLHS(JL, JM, JN) = ZQLHS(JL, JM, JN) / ZQLHS(JL, JN, JN)
       END DO
 
       ! Adds error
       DO IK = JN + 1, NCLV ! 2
-        DO JL = 1, KLON ! 3
+        DO JL = KIDIA, KFDIA ! 3
           ! 3, 1, 2 = 3, 1, 2 - 3, 1, 0 * 3, 0, 2
           ZQLHS(JL, JM, IK) = ZQLHS(JL, JM, IK) - (ZQLHS(JL, JM, JN) * ZQLHS(JL, JN, IK))
         END DO
@@ -34,14 +34,14 @@ SUBROUTINE lu_solver_microphysics( KIDIA, KFDIA, KLON, NCLV, ZQLHS, ZQXN) BIND(C
   ! Adds error
   DO JN = 2, NCLV
     DO JM = 1, JN - 1
-      DO JL = 1, KLON
+      DO JL = KIDIA, KFDIA
         ZQXN(JL, JN) = ZQXN(JL, JN) - (ZQLHS(JL, JN, JM) * ZQXN(JL, JM))
       END DO
     END DO
   END DO
 
   ! Backward substitution: last variable
-  DO JL = 1, KLON
+  DO JL = KIDIA, KFDIA
     ZQXN(JL, NCLV) = ZQXN(JL, NCLV) / ZQLHS(JL, NCLV, NCLV)
   END DO
   
@@ -49,11 +49,11 @@ SUBROUTINE lu_solver_microphysics( KIDIA, KFDIA, KLON, NCLV, ZQLHS, ZQXN) BIND(C
   DO JN = NCLV - 1, 1, -1
     DO JM = JN + 1, NCLV
       ! adds error
-      DO JL = 1, KLON
+      DO JL = KIDIA, KFDIA
         ZQXN(JL, JN) = ZQXN(JL, JN) - (ZQLHS(JL, JN, JM) * ZQXN(JL, JM))
       END DO
     END DO
-    DO JL = 1, KLON
+    DO JL = KIDIA, KFDIA
       ZQXN(JL, JN) = ZQXN(JL, JN) / ZQLHS(JL, JN, JN)
     END DO
   END DO
