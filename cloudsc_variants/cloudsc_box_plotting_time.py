@@ -255,7 +255,7 @@ def main():
     ap.add_argument("--boxplot", action="store_true", help="Use raw_data_*.txt files and draw box plots.")
     ap.add_argument("--out-dir", default="plots")
     ap.add_argument("--variants", nargs="*", default=None)
-    ap.add_argument("--cost-model", choices=("cheap", "default", "unlimited", "disabled"), default=None,
+    ap.add_argument("--cost_model", choices=("cheap", "default", "unlimited", "disabled"), default=None,
                     help="Only include one cost model in boxplot mode.")
     ap.add_argument("--cpu", choices=("eiger", "daint"), default=None,
                     help="Only include one cluster/cpu in boxplot mode.")
