@@ -168,7 +168,7 @@ def dace_lane(mod, variant, frontend, arrays, reps):
     return out, samples[0], samples[1:]
 
 
-def bench(variant, frontends, reps, regen, compiler, cpu):
+def bench(variant, frontends, reps, regen, compiler, cluster):
     """Run one variant end to end and return its report rows."""
     if regen:
         for frontend in frontends:
@@ -195,7 +195,7 @@ def bench(variant, frontends, reps, regen, compiler, cpu):
         rows.append((f"DaCe {frontend}-frontend", stats_us(timed), cold, ok, msg))
         raw_rows.append((f"DaCe {frontend}-frontend", timed))
 
-    raw_path = write_raw_data(variant, raw_rows, compiler, cpu)
+    raw_path = write_raw_data(variant, raw_rows, compiler, cluster)
     print(f"  wrote raw timing data to {raw_path}")
     for _, _, _, _, msg in rows:
         print("  " + msg)
@@ -237,7 +237,7 @@ def main() -> int:
 
     results, allok = [], True
     for variant in variants:
-        rows = bench(variant, frontends, args.reps, not args.skip_regen, args.compiler, args.cpu)
+        rows = bench(variant, frontends, args.reps, not args.skip_regen, args.compiler, args.cluster)
         results.append((variant, rows))
         allok = allok and all(ok for _, _, _, ok, _ in rows)
     report(results)
