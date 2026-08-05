@@ -154,7 +154,7 @@ def lane_key(lane):
     return LANE_ORDER.index(lane) if lane in LANE_ORDER else len(LANE_ORDER)
 
 
-def plot_boxplots(raw_df, variant, out_dir):
+def plot_boxplots(raw_df, variant, out_dir, cost_model):
     sub = raw_df[raw_df["variant"] == variant].copy()
     if cost_model is not None:
         sub = sub[sub["cost_model"] == cost_model]
