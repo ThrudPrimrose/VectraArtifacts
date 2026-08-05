@@ -234,9 +234,9 @@ def plot_boxplots(raw_df, variant, out_dir, cost_model=None, cpu=None):
         legend_labels,
         title="cpu | compiler | cost_model",
         fontsize=9,
-        ncol=2,
+        ncol=1,
         loc="upper center",
-        bbox_to_anchor=(0.5, -0.18),
+        bbox_to_anchor=(0.375, -0.18),
         frameon=False,
     )
 
