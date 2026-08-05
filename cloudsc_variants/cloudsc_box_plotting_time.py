@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """Plot CloudSC timing results.
 
-This script parses bench_source.*.txt files produced by bench_variants.py and
-creates timing comparison charts.
-
 Default mode:
     - one figure per kernel (variant)
     - one figure per cost model
     - x-axis: lanes
     - grouped bars: compiler / cpu combinations
 
-New flag:
+Combined mode:
     --combine-cost-models
-    When set, the script produces one larger figure per kernel that combines
-    *all* cost models into a single graph instead of making separate graphs per
-    cost model.
+    Produces one larger figure per kernel that shows *all* cost models on the
+    same image. Bars are NOT merged: every cost-model / compiler combination
+    remains a separate bar (roughly 16 bars per kernel when both clusters and
+    both compilers are present).
 
-Example:
-    python3 cloudsc_box_plotting_time.py --results-dirs timing_results_eiger timing_results_daint
-    python3 cloudsc_box_plotting_time.py --combine-cost-models
+Only the CPU tag is used in the legend now (no cluster tag).
 
 Expected result file format:
     bench_source.<compiler>_<cpu...>_<cost_model>.txt
@@ -32,7 +28,6 @@ import argparse
 import pathlib
 import re
 import sys
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -123,7 +118,7 @@ def plot_variant_one_cost_model(df, variant, cost_model, metric, out_dir, log_sc
     sub = df[(df.variant == variant) & (df.cost_model == cost_model)].copy()
     if sub.empty:
         return None
-    return _plot_grouped(sub, variant, cost_model, metric, out_dir, log_scale)
+    return _plot_grouped(sub, variant, cost_model, metric, out_dir, log_scale, combined=False)
 
 
 def plot_variant_combined(df, variant, metric, out_dir, log_scale):
@@ -135,14 +130,15 @@ def plot_variant_combined(df, variant, metric, out_dir, log_scale):
 
 def _plot_grouped(sub, variant, cost_model, metric, out_dir, log_scale, combined=False):
     lanes = sorted(sub["lane"].unique(), key=lane_key)
-    sub["combo"] = sub["cluster"] + " / " + sub["cpu"] + " / " + sub["compiler"]
+    sub = sub.copy()
+    sub["combo"] = sub["cpu"] + " / " + sub["compiler"] + " / " + sub["cost_model"]
     combos = sorted(sub["combo"].unique())
 
     x = np.arange(len(lanes))
     width = 0.8 / max(len(combos), 1)
     is_ratio = metric == "ratio_vs_f"
 
-    fig, ax = plt.subplots(figsize=(max(10, 2.5 * len(lanes)), 6))
+    fig, ax = plt.subplots(figsize=(max(12, 2.6 * len(lanes)), 6.5))
     for i, combo in enumerate(combos):
         vals, lo, hi = [], [], []
         for lane in lanes:
@@ -163,7 +159,7 @@ def _plot_grouped(sub, variant, cost_model, metric, out_dir, log_scale, combined
         off = (i - (len(combos) - 1) / 2) * width
         kwargs = dict(width=width * 0.92, label=combo)
         if not is_ratio:
-            kwargs.update(yerr=[lo, hi], capsize=3)
+            kwargs.update(yerr=[lo, hi], capsize=2)
         ax.bar(x + off, vals, **kwargs)
 
     ax.set_xticks(x)
@@ -184,7 +180,7 @@ def _plot_grouped(sub, variant, cost_model, metric, out_dir, log_scale, combined
         title += f" — {cost_model}"
     ax.set_title(title)
     ax.grid(axis="y", linestyle=":", alpha=0.5)
-    ax.legend(title="cluster / cpu / compiler", fontsize=8)
+    ax.legend(title="cpu / compiler / cost_model", fontsize=7, ncol=2)
     fig.tight_layout()
 
     suffix = "combined" if combined else cost_model
@@ -204,7 +200,7 @@ def main():
     ap.add_argument("--csv-out", default="all_timings.csv")
     ap.add_argument("--no-log-scale", action="store_true")
     ap.add_argument("--combine-cost-models", action="store_true",
-                    help="For each kernel, combine all cost models into one large figure.")
+                    help="For each kernel, show all cost models on one image instead of separate graphs.")
     args = ap.parse_args()
 
     out_dir = pathlib.Path(args.out_dir)
@@ -213,27 +209,18 @@ def main():
     df.to_csv(args.csv_out, index=False)
 
     variants = args.variants or sorted(df.variant.unique())
-    if args.cost_models is not None and not args.combine_cost_models:
-        cost_models = args.cost_models
-    else:
-        cost_models = sorted(df.cost_model.unique())
-
-    made = 0
     if args.combine_cost_models:
         for variant in variants:
             p = plot_variant_combined(df, variant, args.metric, out_dir, not args.no_log_scale)
             if p:
                 print(f"wrote {p}")
-                made += 1
     else:
+        cost_models = args.cost_models or sorted(df.cost_model.unique())
         for variant in variants:
             for cm in cost_models:
                 p = plot_variant_one_cost_model(df, variant, cm, args.metric, out_dir, not args.no_log_scale)
                 if p:
                     print(f"wrote {p}")
-                    made += 1
-
-    print(f"done: {made} figure(s)")
 
 
 if __name__ == "__main__":
