@@ -228,8 +228,8 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=50, help="timed repetitions per lane (default 50)")
     ap.add_argument("--frontend", choices=("fortran", "python", "both"), default="both")
     ap.add_argument("--skip-regen", action="store_true", help="reuse the checked-in SDFGs instead of regenerating")
-    ap.add_argument("--compiler", choices=("clang", "gcc"), help="must pick a compiler")
-    ap.add_argument("--cluster", choices=("eiger", "daint"), help="must pick a cluster")
+    ap.add_argument("--compiler", choices=("clang", "gcc"), help="must pick a compiler (for the raw data output)")
+    ap.add_argument("--cluster", choices=("eiger", "daint"), help="must pick a cluster (for the raw data output)")
     args = ap.parse_args()
 
     variants = (args.only, ) if args.only else regen_sdfgs.VARIANTS
