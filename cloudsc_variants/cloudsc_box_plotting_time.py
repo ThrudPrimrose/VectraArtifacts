@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 """CloudSC timing plotter.
 
-Supports:
-  1) summary files: bench_source.<compiler>_<cpu>_<cost_model>.txt
-  2) raw files:     raw_data_<variant>_<cost_model>_<compiler>.txt
+Boxplot mode:
+  - reads raw_data_<variant>_<cost_model>_<compiler>.txt files
+  - filters by optional --cost-model and --cpu
+  - makes one figure per kernel with one box for every combination of
+    cost model / cpu / compiler / lane present in the raw data
 
-Boxplot mode (--boxplot) reads the raw files and makes one large figure per
-variant with one box for every combination of:
-  - cost model
-  - cpu (inferred from parent results directory)
-  - compiler
-  - lane
-
-This is intended to yield ~24 box plots per kernel when all combinations are
-present.
+Requested plotting improvements:
+  - kernel labels rotated 90 degrees
+  - larger text sizes
+  - y-axis starts at 0
+  - legend placed below the figure, outside the axes
 """
 
 from __future__ import annotations
@@ -42,7 +40,15 @@ ROW_RE = re.compile(
     r"(?P<status>PASS|FAIL)\s*$"
 )
 LANE_ORDER = ["original Fortran", "DaCe fortran-frontend", "DaCe python-frontend"]
-COST_ORDER = ["cheap", "default", "unlimited", "disabled"]
+
+plt.rcParams.update({
+    "font.size": 12,
+    "axes.titlesize": 15,
+    "axes.labelsize": 13,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
+    "legend.fontsize": 10,
+})
 
 
 def cpu_from_dir(d: pathlib.Path) -> str:
@@ -154,17 +160,18 @@ def lane_key(lane):
     return LANE_ORDER.index(lane) if lane in LANE_ORDER else len(LANE_ORDER)
 
 
-def plot_boxplots(raw_df, variant, out_dir, cost_model):
+def plot_boxplots(raw_df, variant, out_dir, cost_model=None, cpu=None):
     sub = raw_df[raw_df["variant"] == variant].copy()
     if cost_model is not None:
         sub = sub[sub["cost_model"] == cost_model]
+    if cpu is not None:
+        sub = sub[sub["cpu"] == cpu]
     if sub.empty:
         return None
 
     lanes = sorted(sub["lane"].unique(), key=lane_key)
     combos = sorted(sub[["cpu", "compiler", "cost_model"]].drop_duplicates().itertuples(index=False, name=None))
 
-    # One figure, 24-ish boxes: for each lane, show every cpu/compiler/cost_model combo.
     fig, ax = plt.subplots(figsize=(max(18, 3.0 * len(lanes)), 8))
     n_combos = len(combos)
     width = 0.8 / max(n_combos, 1)
@@ -181,12 +188,12 @@ def plot_boxplots(raw_df, variant, out_dir, cost_model):
     for lane_idx, lane in enumerate(lanes):
         lane_groups = []
         for combo in combos:
-            cpu, compiler, cost_model = combo
+            cpu_name, compiler, cost = combo
             vals = sub[
                 (sub["lane"] == lane) &
-                (sub["cpu"] == cpu) &
+                (sub["cpu"] == cpu_name) &
                 (sub["compiler"] == compiler) &
-                (sub["cost_model"] == cost_model)
+                (sub["cost_model"] == cost)
             ]["us"].tolist()
             if vals:
                 lane_groups.append((combo, vals))
@@ -211,22 +218,33 @@ def plot_boxplots(raw_df, variant, out_dir, cost_model):
         med.set_linewidth(1.3)
 
     ax.set_xticks(x)
-    ax.set_xticklabels(lanes, rotation=15, ha="right")
+    ax.set_xticklabels(lanes, rotation=90, ha="center")
     ax.set_ylabel("us")
+    ax.set_ylim(bottom=0)
     ax.set_title(f"{variant} — raw timing box plot")
     ax.grid(axis="y", linestyle=":", alpha=0.5)
 
-    # Legend: one entry per distinct cpu/compiler/cost_model combination.
     for combo, color in color_map.items():
-        cpu, compiler, cost_model = combo
+        cpu_name, compiler, cost = combo
         legend_items.append(plt.Line2D([0], [0], color=color, lw=8))
-        legend_labels.append(f"{cpu} | {compiler} | {cost_model}")
+        legend_labels.append(f"{cpu_name} | {compiler} | {cost}")
 
-    ax.legend(legend_items, legend_labels, title="cpu | compiler | cost_model", fontsize=7, ncol=2, loc="upper right")
+    ax.legend(
+        legend_items,
+        legend_labels,
+        title="cpu | compiler | cost_model",
+        fontsize=9,
+        ncol=2,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.18),
+        frameon=False,
+    )
 
-    fig.tight_layout()
-    out_path = out_dir / f"box_{variant}_raw_all.png"
-    fig.savefig(out_path, dpi=150)
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    suffix = f"_cost-{cost_model}" if cost_model else ""
+    suffix += f"_cpu-{cpu}" if cpu else ""
+    out_path = out_dir / f"box_{variant}_raw_all{suffix}.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
@@ -237,7 +255,10 @@ def main():
     ap.add_argument("--boxplot", action="store_true", help="Use raw_data_*.txt files and draw box plots.")
     ap.add_argument("--out-dir", default="plots")
     ap.add_argument("--variants", nargs="*", default=None)
-    ap.add_argument("--cost_model", choices=("cheap", "default", "unlimited", "disabled"), default=None, help="Only include one cost model in boxplot mode.")
+    ap.add_argument("--cost-model", choices=("cheap", "default", "unlimited", "disabled"), default=None,
+                    help="Only include one cost model in boxplot mode.")
+    ap.add_argument("--cpu", choices=("eiger", "daint"), default=None,
+                    help="Only include one cluster/cpu in boxplot mode.")
     args = ap.parse_args()
 
     out_dir = pathlib.Path(args.out_dir)
@@ -250,7 +271,7 @@ def main():
         variants = args.variants or sorted(raw_df["variant"].unique())
         made = 0
         for variant in variants:
-            p = plot_boxplots(raw_df, variant, out_dir, cost_model=args.cost_model)
+            p = plot_boxplots(raw_df, variant, out_dir, cost_model=args.cost_model, cpu=args.cpu)
             if p:
                 print(f"wrote {p}")
                 made += 1
