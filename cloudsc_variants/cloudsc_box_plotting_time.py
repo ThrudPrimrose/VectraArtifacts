@@ -156,6 +156,8 @@ def lane_key(lane):
 
 def plot_boxplots(raw_df, variant, out_dir):
     sub = raw_df[raw_df["variant"] == variant].copy()
+    if cost_model is not None:
+        sub = sub[sub["cost_model"] == cost_model]
     if sub.empty:
         return None
 
@@ -235,6 +237,7 @@ def main():
     ap.add_argument("--boxplot", action="store_true", help="Use raw_data_*.txt files and draw box plots.")
     ap.add_argument("--out-dir", default="plots")
     ap.add_argument("--variants", nargs="*", default=None)
+    ap.add_argument("--cost-model", choices=("cheap", "default", "unlimited", "disabled"), default=None, help="Only include one cost model in boxplot mode.")
     args = ap.parse_args()
 
     out_dir = pathlib.Path(args.out_dir)
@@ -247,7 +250,7 @@ def main():
         variants = args.variants or sorted(raw_df["variant"].unique())
         made = 0
         for variant in variants:
-            p = plot_boxplots(raw_df, variant, out_dir)
+            p = plot_boxplots(raw_df, variant, out_dir, cost_model=args.cost_model)
             if p:
                 print(f"wrote {p}")
                 made += 1
