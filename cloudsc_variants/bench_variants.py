@@ -118,8 +118,8 @@ def fortran_lane(mod, variant, arrays, reps):
     check_wall_bounds(f"{variant} fortran", samples, wall)
     return out, samples[0], samples[1:]
 
-def write_raw_data(variant, rows, compiler, cluster):
-    path = os.path.join(HERE, f"timing_results_{cluster}", f"raw_data_{variant}_{compiler}.txt")
+def write_raw_data(variant, rows, compiler, cost_model, cluster):
+    path = os.path.join(HERE, f"timing_results_{cluster}", f"raw_data_{variant}_{cost_model}_{compiler}.txt")
     with open(path, "w") as f:
         f.write("variant\tlane\trep\tus\n")
         for lane, samples in rows:
@@ -168,7 +168,7 @@ def dace_lane(mod, variant, frontend, arrays, reps):
     return out, samples[0], samples[1:]
 
 
-def bench(variant, frontends, reps, regen, compiler, cluster):
+def bench(variant, frontends, reps, regen, compiler, cost_model, cluster):
     """Run one variant end to end and return its report rows."""
     if regen:
         for frontend in frontends:
@@ -195,7 +195,7 @@ def bench(variant, frontends, reps, regen, compiler, cluster):
         rows.append((f"DaCe {frontend}-frontend", stats_us(timed), cold, ok, msg))
         raw_rows.append((f"DaCe {frontend}-frontend", timed))
 
-    raw_path = write_raw_data(variant, raw_rows, compiler, cluster)
+    raw_path = write_raw_data(variant, raw_rows, compiler, cost_model, cluster)
     print(f"  wrote raw timing data to {raw_path}")
     for _, _, _, _, msg in rows:
         print("  " + msg)
@@ -230,6 +230,7 @@ def main() -> int:
     ap.add_argument("--skip-regen", action="store_true", help="reuse the checked-in SDFGs instead of regenerating")
     ap.add_argument("--compiler", choices=("clang", "gcc"), help="must pick a compiler (for the raw data output)")
     ap.add_argument("--cluster", choices=("eiger", "daint"), help="must pick a cluster (for the raw data output)")
+    ap.add_argument("--cost_model", choices=("cheap", "default", "unlimited", "disabled"), help="must pick a cost_model (for the raw data output)")
     args = ap.parse_args()
 
     variants = (args.only, ) if args.only else regen_sdfgs.VARIANTS
@@ -237,7 +238,7 @@ def main() -> int:
 
     results, allok = [], True
     for variant in variants:
-        rows = bench(variant, frontends, args.reps, not args.skip_regen, args.compiler, args.cluster)
+        rows = bench(variant, frontends, args.reps, not args.skip_regen, args.compiler, args.cost_model, args.cluster)
         results.append((variant, rows))
         allok = allok and all(ok for _, _, _, ok, _ in rows)
     report(results)
