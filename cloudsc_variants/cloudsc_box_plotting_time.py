@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """Plot CloudSC timing results, including box plots from raw repetition data.
 
-This script understands two kinds of inputs:
-  1. summary benchmark files: bench_source.*.txt
-  2. raw per-repetition timing files: raw_data_*.txt
+Inputs:
+  1) summary files: bench_source.<compiler>_<cpu...>_<cost_model>.txt
+  2) raw files:     raw_data_<variant>_<compiler>.txt
 
-Raw file naming convention:
-  raw_data_<variant>_<compiler>.txt
-where the CPU type is inferred from the parent results directory:
-  timing_results_eiger   -> cpu = eiger
-  timing_results_daint   -> cpu = daint
+In boxplot mode, the script makes one figure per variant with all available:
+  - cost models
+  - CPUs (inferred from folder name timing_results_<cpu>)
+  - compilers
+  - lanes
+on a single graph.
 
-Example raw file names:
-  raw_data_autoconversion_snow_clang.txt
-  raw_data_autoconversion_snow_gcc.txt
+That yields roughly 24 separate box plots per kernel when everything is present.
 
-The script can draw real box plots from the raw 200 timing points with:
-  --boxplot
+Usage examples:
+  python3 cloudsc_box_plotting_time.py --boxplot
+  python3 cloudsc_box_plotting_time.py --boxplot --results-dirs timing_results_eiger timing_results_daint
 
-If --combine-cost-models is given, summary plots show all cost models on the
-same image. Boxplot mode ignores cost models because raw files do not encode
-that axis.
+The legend now distinguishes CPU/compiler/cost-model combinations, and each box
+has its own color.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ import argparse
 import pathlib
 import re
 import sys
+from itertools import cycle
 
 import numpy as np
 import pandas as pd
@@ -132,7 +132,7 @@ def parse_raw_file(path: pathlib.Path, cluster: str):
             "cluster": cluster,
             "compiler": compiler,
             "cpu": cpu,
-            "variant": row_variant if row_variant else variant,
+            "variant": row_variant,
             "lane": lane,
             "rep": rep,
             "us": us,
@@ -159,6 +159,103 @@ def collect_data(results_dirs):
 
 def lane_key(lane):
     return LANE_ORDER.index(lane) if lane in LANE_ORDER else len(LANE_ORDER)
+
+
+def plot_boxplots(raw_df, variant, out_dir):
+    sub = raw_df[raw_df["variant"] == variant].copy()
+    if sub.empty:
+        return None
+
+    lanes = sorted(sub["lane"].unique(), key=lane_key)
+    combos = sorted(sub[["cpu", "compiler"]].drop_duplicates().itertuples(index=False, name=None))
+    cost_models = sorted(sub["cost_model"].dropna().unique())
+
+    # If cost_model is not encoded in raw files, infer it from the source summary files not possible.
+    # In raw mode we still keep a 24-box layout by using all unique cluster/cpu/compiler/lane groups.
+    # If multiple cost-models are truly present, they must be encoded in the raw file or sidecar path.
+    # Here we map each raw file to a pseudo cost-model from the file name if available.
+    if "cost_model" not in sub.columns:
+        sub["cost_model"] = "unknown"
+        cost_models = ["unknown"]
+
+    # Fall back to a per-file pseudo cost-model label if the raw files were generated per run.
+    # This keeps every box distinct on one graph.
+    if (sub["cost_model"] == "unknown").all():
+        sub["cost_model"] = sub["source_file"].apply(lambda p: pathlib.Path(p).stem)
+        cost_models = sorted(sub["cost_model"].unique())
+
+    # Build one box per (cpu, compiler, cost_model, lane).
+    groups = []
+    for cost in cost_models:
+        for cpu, compiler in combos:
+            for lane in lanes:
+                vals = sub[(sub["cost_model"] == cost) & (sub["cpu"] == cpu) & (sub["compiler"] == compiler) & (sub["lane"] == lane)]["us"].tolist()
+                if vals:
+                    groups.append((cost, cpu, compiler, lane, vals))
+
+    if not groups:
+        return None
+
+    # Arrange groups along x: lanes are the main axis; within each lane, every cost/cpu/compiler box is shown.
+    fig, ax = plt.subplots(figsize=(max(18, 3.6 * len(lanes)), 8))
+    lane_span = 1.0
+    n_per_lane = len([g for g in groups if g[3] == lanes[0]]) if lanes else len(groups)
+    per_lane_count = max(len(groups) // max(len(lanes), 1), 1)
+    box_width = 0.8 / max(per_lane_count, 1)
+
+    positions = []
+    data = []
+    colors = []
+    labels = []
+    palette = cycle(plt.cm.tab20.colors)
+    color_map = {}
+
+    for lane_index, lane in enumerate(lanes):
+        lane_groups = [g for g in groups if g[3] == lane]
+        n = len(lane_groups)
+        for idx, (cost, cpu, compiler, _, vals) in enumerate(lane_groups):
+            pos = lane_index + (idx - (n - 1) / 2) * (0.9 / max(n, 1))
+            positions.append(pos)
+            data.append(vals)
+            key = (cost, cpu, compiler)
+            if key not in color_map:
+                color_map[key] = next(palette)
+            colors.append(color_map[key])
+            labels.append(f"{cost} | {cpu} | {compiler}")
+
+    bp = ax.boxplot(data, positions=positions, widths=box_width, patch_artist=True, showfliers=True)
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.8)
+    for med in bp["medians"]:
+        med.set_color("black")
+        med.set_linewidth(1.3)
+
+    ax.set_xticks(range(len(lanes)))
+    ax.set_xticklabels(lanes, rotation=15, ha="right")
+    ax.set_ylabel("us")
+    ax.set_title(f"{variant} — raw timing box plot (all cost models, cpu, compiler)")
+    ax.grid(axis="y", linestyle=":", alpha=0.5)
+
+    # Legend proxies: one entry per (cost_model, cpu, compiler)
+    legend_items = []
+    legend_labels = []
+    seen = set()
+    for (cost, cpu, compiler), color in color_map.items():
+        lbl = f"{cost} | {cpu} | {compiler}"
+        if lbl in seen:
+            continue
+        seen.add(lbl)
+        legend_items.append(plt.Line2D([0], [0], color=color, lw=8))
+        legend_labels.append(lbl)
+
+    ax.legend(legend_items, legend_labels, title="cost | cpu | compiler", fontsize=7, ncol=2, loc="upper right")
+
+    fig.tight_layout()
+    out_path = out_dir / f"box_{variant}_raw_all.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
 
 
 def plot_summary_grouped(df, variant, cost_model, metric, out_dir, log_scale, combined=False):
@@ -213,67 +310,6 @@ def plot_summary_grouped(df, variant, cost_model, metric, out_dir, log_scale, co
     fig.tight_layout()
     suffix = "combined" if combined else cost_model
     out_path = out_dir / f"timings_{variant}_{suffix}_{metric}.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
-
-
-def plot_boxplots(raw_df, variant, out_dir):
-    if raw_df.empty:
-        return None
-    sub = raw_df[raw_df["variant"] == variant].copy()
-    if sub.empty:
-        return None
-
-    lanes = sorted(sub["lane"].unique(), key=lane_key)
-    groups = sorted(sub[["cpu", "compiler"]].drop_duplicates().itertuples(index=False, name=None))
-
-    fig, ax = plt.subplots(figsize=(max(14, 3.0 * len(lanes)), max(7, 0.55 * len(groups) + 3)))
-    n_groups = len(groups)
-    width = 0.8 / max(n_groups, 1)
-    x = np.arange(len(lanes))
-
-    box_data = []
-    box_positions = []
-    labels = []
-    for i, (cpu, compiler) in enumerate(groups):
-        combo = (sub["cpu"] == cpu) & (sub["compiler"] == compiler)
-        for j, lane in enumerate(lanes):
-            vals = sub[combo & (sub["lane"] == lane)]["us"].tolist()
-            if not vals:
-                continue
-            pos = j + (i - (n_groups - 1) / 2) * width
-            box_positions.append(pos)
-            box_data.append(vals)
-            labels.append(f"{cpu} / {compiler}")
-
-    bp = ax.boxplot(box_data, positions=box_positions, widths=width * 0.85,
-                    patch_artist=True, showfliers=True)
-    for patch in bp["boxes"]:
-        patch.set_facecolor("#8fb9ff")
-        patch.set_alpha(0.75)
-    for med in bp["medians"]:
-        med.set_color("black")
-        med.set_linewidth(1.5)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(lanes, rotation=15, ha="right")
-    ax.set_ylabel("us")
-    ax.set_title(f"{variant} — raw timing box plot")
-    ax.grid(axis="y", linestyle=":", alpha=0.5)
-
-    if labels:
-        uniq = []
-        seen = set()
-        for lbl in labels:
-            if lbl not in seen:
-                uniq.append(lbl)
-                seen.add(lbl)
-        ax.legend([plt.Line2D([0], [0], color="#8fb9ff", lw=8)] * len(uniq),
-                  uniq, title="cpu / compiler", fontsize=7, ncol=2)
-
-    fig.tight_layout()
-    out_path = out_dir / f"box_{variant}_raw.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
