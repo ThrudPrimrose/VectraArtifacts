@@ -119,7 +119,7 @@ def fortran_lane(mod, variant, arrays, reps):
     return out, samples[0], samples[1:]
 
 def write_raw_data(variant, rows):
-    path = os.path.join(HERE, f"raw_data_{variant}.txt")
+    path = os.path.join(HERE, "timing_results_daint", f"raw_data_{variant}.txt")
     with open(path, "w") as f:
         f.write("variant\tlane\trep\tus\n")
         for lane, samples in rows:
@@ -240,10 +240,7 @@ def main() -> int:
         allok = allok and all(ok for _, _, _, ok, _ in rows)
     report(results)
     print("\n" + ("ALL LANES MATCH THE NUMPY ORACLE" if allok else "SOME LANES DIVERGED FROM THE NUMPY ORACLE"))
-    exit_code = 0 if allok else 1
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(exit_code)
+    return 0 if allok else 1
 
 
 if __name__ == "__main__":
