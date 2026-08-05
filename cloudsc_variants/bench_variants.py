@@ -118,6 +118,15 @@ def fortran_lane(mod, variant, arrays, reps):
     check_wall_bounds(f"{variant} fortran", samples, wall)
     return out, samples[0], samples[1:]
 
+def write_raw_data(variant, rows):
+    path = os.path.join(HERE, f"raw_data_{variant}.txt")
+    with open(path, "w") as f:
+        f.write("variant\tlane\trep\tus\n")
+        for lane, samples in rows:
+            for i, us in enumerate(samples, start=1):
+                f.write(f"{variant}\t{lane}\t{i}\t{us:.6f}\n")
+    return path
+
 
 def dace_lane(mod, variant, frontend, arrays, reps):
     """Run the compiled SDFG under Timer instrumentation, returning (outputs, cold_us, timed_us)."""
@@ -174,13 +183,20 @@ def bench(variant, frontends, reps, regen):
           f"{'assigned by the kernel' if slot2 else 'never assigned (unused slot)'}")
 
     rows = []
+    raw_rows = []
     got, cold, timed = fortran_lane(mod, variant, arrays, reps)
     ok, msg = native.compare("Fortran vs NumPy", ref, got, mod.RTOL)
     rows.append(("original Fortran", stats_us(timed), cold, ok, msg))
+    raw_rows.append(("original Fortran", timed))
+
     for frontend in frontends:
         got, cold, timed = dace_lane(mod, variant, frontend, arrays, reps)
         ok, msg = native.compare(f"DaCe {frontend}-frontend vs NumPy", ref, got, mod.RTOL)
         rows.append((f"DaCe {frontend}-frontend", stats_us(timed), cold, ok, msg))
+        raw_rows.append((f"DaCe {frontend}-frontend", timed))
+
+    raw_path = write_raw_data(variant, raw_rows)
+    print(f"  wrote raw timing data to {raw_path}")
     for _, _, _, _, msg in rows:
         print("  " + msg)
     return rows
@@ -224,7 +240,10 @@ def main() -> int:
         allok = allok and all(ok for _, _, _, ok, _ in rows)
     report(results)
     print("\n" + ("ALL LANES MATCH THE NUMPY ORACLE" if allok else "SOME LANES DIVERGED FROM THE NUMPY ORACLE"))
-    return 0 if allok else 1
+    exit_code = 0 if allok else 1
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)
 
 
 if __name__ == "__main__":
