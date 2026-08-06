@@ -217,6 +217,64 @@ def _build_env(env: dict, compiler: str, cost_model: str, cpu: str) -> dict:
     return env
 
 
+def _dump_asm(
+    src_root: pathlib.Path,
+    pattern: str,
+    build_dir: pathlib.Path,
+    env: dict,
+    jobs: int,
+) -> None:
+    """Re-compile every source file to assembly (.s) with the same optimisation
+    flags used for the object build, minus any diagnostic/remark flags.
+    Output goes to build_dir/asm/<kernel>.s."""
+    import concurrent.futures
+    import json
+
+    asm_dir = build_dir / "asm"
+    asm_dir.mkdir(exist_ok=True)
+
+    # Ask compiler_config (running in the same env) for the exact resolved
+    # COMPILE_FLAGS, so assembly flags are bit-for-bit identical to object flags.
+    flags_proc = subprocess.run(
+        ["python3", "-c",
+         "import compiler_config, json; print(json.dumps(list(compiler_config.COMPILE_FLAGS)))"],
+        env=env, capture_output=True, text=True,
+    )
+    if flags_proc.returncode != 0:
+        print(
+            f"  [asm] could not resolve COMPILE_FLAGS: {flags_proc.stderr[:500]}",
+            file=sys.stderr,
+        )
+        return
+
+    cxx = env.get("CXX", "clang++")
+    compile_flags = json.loads(flags_proc.stdout)
+    srcs = sorted(src_root.rglob(pattern))
+    if not srcs:
+        print(f"  [asm] no sources matching {pattern!r} under {src_root}/", file=sys.stderr)
+        return
+    print(f"  [asm] dumping {len(srcs)} assembly file(s) -> {asm_dir}/")
+
+    def _compile_one(src: pathlib.Path) -> bool:
+        out = asm_dir / (src.stem + ".s")
+        res = subprocess.run(
+            [cxx, "-S", *compile_flags, str(src), "-o", str(out)],
+            stderr=subprocess.PIPE, text=True,
+        )
+        if res.returncode != 0:
+            print(f"  [asm] FAIL {src.name}: {res.stderr[:300]}", file=sys.stderr)
+        return res.returncode == 0
+
+    if jobs > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            futs = [pool.submit(_compile_one, s) for s in srcs]
+            ok = sum(1 for f in concurrent.futures.as_completed(futs) if f.result())
+    else:
+        ok = sum(1 for s in srcs if _compile_one(s))
+
+    print(f"  [asm] {ok}/{len(srcs)} assembly files written.")
+
+
 def _resolve_shard(args) -> tuple[int, int]:
     """
     Resolve (shard_id, num_shards).
@@ -289,6 +347,11 @@ valid precisions  : {", ".join(ALL_PRECISIONS)}
     ap.add_argument("--no-cpp",  action="store_true", help="Skip C++ compilation.")
     ap.add_argument("--no-dace", action="store_true", help="Skip DaCe compilation.")
     ap.add_argument(
+        "--dump-asm", action="store_true",
+        help="After each C++ build, re-compile every source file with -S and write "
+             "assembly to build/asm/<kernel>.s alongside the object files.",
+    )
+    ap.add_argument(
         "--shard-id", type=int, default=None, metavar="N",
         help="0-indexed shard this process handles. Defaults to $SLURM_PROCID if unset.",
     )
@@ -315,6 +378,7 @@ def compile_cell(
     jobs: int,
     skip_cpp: bool,
     skip_dace: bool,
+    dump_asm: bool = False,
 ) -> None:
     scripts_dir = pathlib.Path("scripts")
     scripts_dir.mkdir(exist_ok=True)
@@ -366,6 +430,15 @@ def compile_cell(
         print(f"  CPP  {status} — {cpp_out_dir}/")
         if result.returncode != 0:
             print(result.stderr[-2000:], file=sys.stderr)
+
+        if dump_asm and result.returncode == 0:
+            _dump_asm(
+                src_root=pathlib.Path(cpp_kernels),
+                pattern=pattern_cpp,
+                build_dir=cpp_build_dir,
+                env=env,
+                jobs=jobs,
+            )
 
     # ── DaCe ──────────────────────────────────────────────────────────────────
     if not skip_dace:
@@ -459,6 +532,7 @@ def main(argv=None):
             jobs=args.jobs,
             skip_cpp=args.no_cpp,
             skip_dace=args.no_dace,
+            dump_asm=args.dump_asm,
         )
 
     print(f"\\nDone. Shard {shard_id}/{num_shards} compiled {len(my_runs)} cell(s).")
