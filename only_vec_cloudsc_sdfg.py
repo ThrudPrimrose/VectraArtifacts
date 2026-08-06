@@ -40,8 +40,8 @@ _COST_MODEL_CXXFLAGS_GCC = {
     "unlimited": "-fno-vect-cost-model",
 }
 _VEC_REMARK_FLAGS = {
-    "clang": "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize",
-    "gcc":   "-fopt-info-vec-all",
+    "clang": "-Rpass=.* -Rpass-missed=.*",
+    "gcc":   "-fopt-info-all",
     "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
 }
 

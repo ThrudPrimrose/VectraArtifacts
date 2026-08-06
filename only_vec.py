@@ -78,7 +78,7 @@ _PRECISION_PATTERNS: dict = {
 _COST_MODEL_CXXFLAGS = {
     "default":   "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
     # "cheap":     "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
-    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -Rpass-analysis=loop-vectorize",
+    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros ",
     "disabled":  "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-vectorize -fno-slp-vectorize",
 }
 _COST_MODEL_CXXFLAGS_GCC = {
@@ -91,8 +91,8 @@ _COST_MODEL_CXXFLAGS_GCC = {
 
 # ── Vectorisation remark flags ─────────────────────────────────────────────────
 _VEC_REMARK_FLAGS = {
-    "clang": "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize",
-    "gcc":   "-fopt-info-vec-optimized -fopt-info-vec-missed",
+    "clang": "-Rpass=.* -Rpass-missed=.*",
+    "gcc":   "-fopt-info-all",
     "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
 }
 
