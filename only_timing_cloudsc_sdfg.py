@@ -49,9 +49,9 @@ _FORTRAN_OPT_FLAGS_GCC = {
 # Default values for unresolved CloudSC symbolic dimensions so make_inputs()
 # can allocate arrays without crashing on dace.symbol objects.
 _DEFAULT_SYMBOL_VALS = {
-    "klon": 4194304, "klev": 6000, "nclv": 5,
+    "klon": 16777216, "klev": 120, "nclv": 5,
     "ncldql": 1, "ncldqi": 2, "ncldqr": 3, "ncldqs": 4, "ncldqv": 5,
-    "kidia": 1, "kfdia": 4194304,
+    "kidia": 1, "kfdia": 16777216,
 }
 
 
