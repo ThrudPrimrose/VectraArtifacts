@@ -6,6 +6,23 @@ Compile per-kernel .cpp files into a single shared library.
 Walks a microkernels/cpp root for .cpp files, compiles each to .o with
 header-aware dependency tracking, then links them all into one .so.
 Shared by tsvc_2 and tsvc_2_5.
+
+Vectorization ground truth
+---------------------------
+Compiler remarks (GCC -fopt-info-vec-*, Clang -Rpass=loop-vectorize) can be
+misleading: a compiler may emit an "optimized: loop vectorized" remark for a
+transform that a *later* legality/cost-model pass invalidates, leaving pure
+scalar code in the final object. This was observed empirically (TSVC kernels
+s231, s2102, s1232, ...) where the remark said "vectorized" but the emitted
+machine code contained zero SIMD instructions.
+
+To avoid trusting the remark text, each kernel is now ALSO compiled with -S
+to a real assembly file, which is scanned directly for SIMD register/opcode
+usage (AArch64 NEON/SVE, x86 AVX/AVX-512). That scan is the authoritative
+`vectorized` verdict. The remark-derived verdict is still parsed and kept
+alongside it (`remark_vectorized`) purely as a diagnostic — a mismatch
+between the two is flagged explicitly (`remark_mismatch`) instead of
+requiring manual disassembly review.
 """
 
 import argparse
@@ -20,7 +37,9 @@ import sys
 import time as _time
 from typing import List, Optional
 
+
 import numpy as np
+
 
 # ---------------------------------------------------------------------------
 # Compiler config (graceful fallback if compiler_config is not importable)
@@ -32,6 +51,7 @@ except ImportError:
     COMPILE_FLAGS = ["-O3", "-std=c++17", "-fPIC", "-march=native"]
     LINK_FLAGS    = ["-shared"]
 
+
 # ---------------------------------------------------------------------------
 # ctypes shorthands
 # ---------------------------------------------------------------------------
@@ -42,6 +62,7 @@ _i64p = ctypes.POINTER(ctypes.c_int64)
 _int  = ctypes.c_int
 _dbl  = ctypes.c_double
 _flt  = ctypes.c_float
+
 
 _TAG_TO_CTYPE = {
     "dp":   _dp,
@@ -103,12 +124,20 @@ def _build_call_args(serial_sig: list, pool: dict, is_float: bool):
         call_args.append(_to_carg(pool[param_name], tag, is_float))
     return call_args, missing
 
+
 # ---------------------------------------------------------------------------
 # Incremental-build helpers
 # ---------------------------------------------------------------------------
 
+
 def obj_path(src: pathlib.Path, build_dir: pathlib.Path) -> pathlib.Path:
     return build_dir / f"{src.stem}.o"
+
+
+def asm_path(src: pathlib.Path, build_dir: pathlib.Path) -> pathlib.Path:
+    """Real compiler-emitted assembly (-S output), used for ground-truth
+    vectorization detection."""
+    return build_dir / f"{src.stem}.vec_check.s"
 
 
 def dep_path(obj: pathlib.Path) -> pathlib.Path:
@@ -138,8 +167,9 @@ def needs_rebuild(src: pathlib.Path, obj: pathlib.Path) -> bool:
         return False
     return src.stat().st_mtime > obj_mtime
 
+
 # ---------------------------------------------------------------------------
-# Vectorization-report helpers
+# Vectorization-report helpers (remark text — DIAGNOSTIC ONLY, not truth)
 # ---------------------------------------------------------------------------
 _VEC_OPTIMIZED_RE = re.compile(
     r"remark.*vectorized loop"
@@ -159,10 +189,110 @@ _VEC_MISSED_RE = re.compile(
     re.IGNORECASE,
 )
 
+
 VECRE = _VEC_OPTIMIZED_RE
 
 
+# ---------------------------------------------------------------------------
+# Assembly-based ground-truth vectorization detection
+# ---------------------------------------------------------------------------
+# AArch64: NEON vector registers (v0.2d, v1.16b, ...), SVE Z/P registers
+# (z0.d, p7/z), quad registers used for 128-bit vector load/store/move (q0),
+# and SVE-specific mnemonics (predicate generation, structured loads, etc).
+_AARCH64_VEC_RE = re.compile(
+    r"\bv\d{1,2}\.\d*[bhsd]\b"                 # NEON vector reg w/ arrangement: v0.2d, v12.4s
+    r"|\bz\d{1,2}\.[bhsd]\b"                   # SVE Z register: z0.d, z26.d
+    r"|\bp\d{1,2}/[zm]\b"                      # SVE predicate governing a vector op: p7/z
+    r"|\bq\d{1,2}\b"                           # 128-bit quad register (vector load/store/move)
+    r"|\b(ld[1-4][bhwd]?|st[1-4][bhwd]?)\b"    # (SVE/NEON) structured / scalable load-store
+    r"|\bwhilelo\b|\bwhilelt\b|\bwhilels\b|\bwhilehs\b|\bwhilege\b|\bwhilegt\b"
+    r"|\bptrue\b|\bpfalse\b|\bmovprfx\b|\bfadda\b|\bfaddv\b|\blastb\b|\blasta\b"
+    r"|\bcntb\b|\bcntd\b|\bcnth\b|\bcntw\b",
+    re.IGNORECASE,
+)
+
+# x86: ymm/zmm registers are always vector (256/512-bit, never scalar). xmm
+# is ambiguous on its own (scalar addsd/mulsd also use xmm), so it only
+# counts when paired with a *packed* suffix (ps/pd) rather than scalar
+# (ss/sd), or with an explicit FMA-packed mnemonic.
+_X86_VEC_RE = re.compile(
+    r"%?[yz]mm\d{1,2}\b"
+    r"|%?xmm\d{1,2}\b.*\b\w*p[sd]\d*\b"
+    r"|\bvfmadd\d{3}p[sd]\b|\bvfmsub\d{3}p[sd]\b",
+    re.IGNORECASE,
+)
+
+# Symbols that are never the actual kernel loop body (runtime/support code)
+# — excluded from the scan so a stray vector instruction there can't
+# produce a false "vectorized" verdict for the kernel itself.
+_NON_KERNEL_SYMBOL_RE = re.compile(
+    r"GLOBAL__sub_I|_ZdlPv|_Znwm|system_clock|chrono",
+    re.IGNORECASE,
+)
+
+# Matches a function-start label in either objdump disassembly
+# ("0000000000000000 <name>:") or raw compiler -S assembly ("name:").
+_FUNC_LABEL_RE = re.compile(
+    r"^[0-9a-f]{8,16}\s+<(?P<obj_name>[^>]+)>:\s*$"
+    r"|^(?P<asm_name>[A-Za-z_$][\w$]*):\s*$"
+)
+
+
+def _split_into_functions(asm_text: str) -> list:
+    """Split raw assembly/disassembly text into (symbol_name, body) chunks."""
+    chunks = []
+    current_name = None
+    current_lines: list = []
+
+    for line in asm_text.splitlines():
+        m = _FUNC_LABEL_RE.match(line.strip())
+        if m:
+            if current_name is not None:
+                chunks.append((current_name, "\n".join(current_lines)))
+            current_name = m.group("obj_name") or m.group("asm_name")
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_name is not None:
+        chunks.append((current_name, "\n".join(current_lines)))
+
+    if not chunks:
+        chunks = [("<unknown>", asm_text)]
+
+    return chunks
+
+
+def _parse_vec_from_asm(asm_text: str, *, kernel_functions_only: bool = True) -> dict:
+    """
+    Ground-truth vectorization check: scan actual assembly/machine code for
+    SIMD register/instruction usage, rather than trusting compiler remarks.
+    """
+    functions = _split_into_functions(asm_text)
+    vec_lines: list = []
+
+    for name, body in functions:
+        if kernel_functions_only and _NON_KERNEL_SYMBOL_RE.search(name):
+            continue
+        for line in body.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if _AARCH64_VEC_RE.search(stripped) or _X86_VEC_RE.search(stripped):
+                vec_lines.append(stripped)
+
+    return {
+        "vectorized":     len(vec_lines) > 0,
+        "vec_count":      len(vec_lines),
+        "missed_count":   0,  # not derivable from assembly alone
+        "sample_remarks": vec_lines[:5],
+        "source":         "assembly",
+    }
+
+
 def _parse_vec_from_rpt(rpt_path: pathlib.Path) -> dict:
+    """Deprecated: remark-text-only parse. Prefer `_vec_info_for_object`,
+    which checks the actual assembly. Kept for backward compatibility."""
     if not rpt_path.exists():
         return {"vectorized": False, "vec_count": 0, "missed_count": 0, "sample_remarks": []}
     text = rpt_path.read_text(errors="replace")
@@ -173,6 +303,43 @@ def _parse_vec_from_rpt(rpt_path: pathlib.Path) -> dict:
         "vec_count":      len(vec_lines),
         "missed_count":   len(missed_lines),
         "sample_remarks": (vec_lines + missed_lines)[:5],
+    }
+
+
+def _vec_info_for_object(build_dir: pathlib.Path, stem: str) -> dict:
+    """
+    Authoritative vectorization info for one compiled .cpp (identified by
+    its source stem, e.g. 's312_d_single').
+
+    `vectorized` / `vec_count` come from scanning the real compiled assembly
+    (ground truth). `remark_vectorized` is what the compiler's text remarks
+    claimed, kept purely for comparison. `remark_mismatch` is True whenever
+    the two disagree — i.e. exactly the "report said vectorized but the
+    binary is scalar" situation found manually in kernels like s231, s2102,
+    s1232 during earlier analysis.
+    """
+    build_dir = pathlib.Path(build_dir)
+    asm_file = build_dir / f"{stem}.vec_check.s"
+    rpt_file = build_dir / f"{stem}.rpt"
+
+    remark_info = _parse_vec_from_rpt(rpt_file)
+
+    if asm_file.exists():
+        asm_info = _parse_vec_from_asm(asm_file.read_text(errors="replace"))
+    else:
+        asm_info = {
+            "vectorized": False, "vec_count": 0, "missed_count": 0,
+            "sample_remarks": [], "source": "unavailable",
+        }
+
+    return {
+        "vectorized":        asm_info["vectorized"],       # ground truth
+        "vec_count":         asm_info["vec_count"],
+        "missed_count":      remark_info["missed_count"],  # only remarks explain *why* something missed
+        "sample_remarks":    asm_info["sample_remarks"] or remark_info["sample_remarks"],
+        "remark_vectorized": remark_info["vectorized"],
+        "remark_mismatch":   asm_info["vectorized"] != remark_info["vectorized"],
+        "source":            asm_info["source"],
     }
 
 
@@ -194,6 +361,8 @@ def vec_report_flag() -> List[str]:
 
 
 def parse_vec_reports(build_dir) -> dict:
+    """Legacy remark-only summary (kernel -> bool). Prefer
+    `parse_vec_reports_detailed`, which is assembly-verified."""
     build_dir = pathlib.Path(build_dir)
     results: dict = {}
     for rpt in sorted(build_dir.rglob("*.rpt")):
@@ -204,26 +373,49 @@ def parse_vec_reports(build_dir) -> dict:
 
 
 def parse_vec_reports_detailed(build_dir) -> dict:
+    """
+    Authoritative, assembly-verified vectorization summary, keyed by kernel
+    base name (suffix _d/_f/_d_single/_f_single stripped).
+
+    Walks every *.vec_check.s (ground truth) alongside its sibling *.rpt
+    (diagnostic remarks) and merges per-kernel via `_vec_info_for_object`.
+    """
     build_dir = pathlib.Path(build_dir)
     results: dict = {}
-    for rpt in sorted(build_dir.rglob("*.rpt")):
-        kernel = re.sub(r"_[df](_single)?$", "", rpt.stem, flags=re.IGNORECASE)
-        info   = _parse_vec_from_rpt(rpt)
+
+    asm_files = sorted(build_dir.rglob("*.vec_check.s"))
+    stems = [p.name[: -len(".vec_check.s")] for p in asm_files]
+
+    # Also pick up kernels that only produced a .rpt (e.g. assembly step
+    # failed) so they still show up as "not vectorized" rather than vanishing.
+    rpt_only_stems = [
+        p.stem for p in sorted(build_dir.rglob("*.rpt"))
+        if p.stem not in stems
+    ]
+
+    for stem in stems + rpt_only_stems:
+        kernel = re.sub(r"_[df](_single)?$", "", stem, flags=re.IGNORECASE)
+        info = _vec_info_for_object(build_dir, stem)
         if kernel not in results:
             results[kernel] = info
         else:
             existing = results[kernel]
             results[kernel] = {
-                "vectorized":     existing["vectorized"] or info["vectorized"],
-                "vec_count":      existing["vec_count"]  + info["vec_count"],
-                "missed_count":   existing["missed_count"] + info["missed_count"],
-                "sample_remarks": (existing["sample_remarks"] + info["sample_remarks"])[:5],
+                "vectorized":        existing["vectorized"] or info["vectorized"],
+                "vec_count":         existing["vec_count"] + info["vec_count"],
+                "missed_count":      existing["missed_count"] + info["missed_count"],
+                "sample_remarks":    (existing["sample_remarks"] + info["sample_remarks"])[:5],
+                "remark_vectorized": existing["remark_vectorized"] or info["remark_vectorized"],
+                "remark_mismatch":   existing["remark_mismatch"] or info["remark_mismatch"],
+                "source":            existing["source"],
             }
     return results
+
 
 # ---------------------------------------------------------------------------
 # Compile / link
 # ---------------------------------------------------------------------------
+
 
 def compile_object(
     src,
@@ -254,6 +446,24 @@ def compile_object(
         raise subprocess.CalledProcessError(result.returncode, result.args, stderr=result.stderr)
     if vec_report:
         obj.with_suffix(".rpt").write_text(result.stderr)
+
+        # Also emit real assembly for ground-truth vectorization detection.
+        # Re-run with -S (no object output) using the same flags so the
+        # emitted code matches what was actually compiled into the .o.
+        asm_out = asm_path(src, build_dir)
+        asm_flags = list(COMPILE_FLAGS)
+        if extra_flags:
+            asm_flags.extend(extra_flags)
+        asm_flags.extend(vec_report_flag())
+        asm_result = subprocess.run(
+            [CXX, "-S", *asm_flags, str(src), "-o", str(asm_out)],
+            stderr=subprocess.PIPE, text=True,
+        )
+        if asm_result.returncode != 0:
+            # Don't fail the whole compile over the diagnostic assembly dump;
+            # just leave the .s file absent so it's treated as unavailable.
+            if asm_out.exists():
+                asm_out.unlink()
     return obj
 
 
@@ -316,9 +526,11 @@ def load_cpp_library(root, build_dir, so_name: str, **kwargs) -> ctypes.CDLL:
     so = compile_library(root, build_dir, so_name, **kwargs)
     return ctypes.CDLL(str(so))
 
+
 # ---------------------------------------------------------------------------
 # Array pool
 # ---------------------------------------------------------------------------
+
 
 def _make_array_pool(len_1d: int, dtype):
     rng     = np.random.default_rng(42)
@@ -390,9 +602,11 @@ def _make_array_pool(len_1d: int, dtype):
         "t2":             8,
     }
 
+
 # ---------------------------------------------------------------------------
 # Signature / bindings loader
 # ---------------------------------------------------------------------------
+
 
 def _load_signatures(root: pathlib.Path, so_path: pathlib.Path):
     import importlib.util
@@ -426,9 +640,11 @@ def infer_precision_from_pattern(pattern: str) -> str:
         return "float"
     return "double"
 
+
 # ---------------------------------------------------------------------------
 # Per-kernel subprocess worker  (mirrors DaCe's _time_one_kernel)
 # ---------------------------------------------------------------------------
+
 
 def _time_one_kernel_worker(args_tuple):
     """
@@ -509,12 +725,13 @@ def _time_one_kernel_worker(args_tuple):
     med = statistics.median(timings)
     mn  = min(timings)
     sd  = statistics.stdev(timings) if len(timings) > 1 else 0
-    # ---- return raw timings alongside aggregates ----
     return sym, base, (med, mn, sd, vec_info, timings)
+
 
 # ---------------------------------------------------------------------------
 # Timing phase — DaCe-style: one kernel per Pool, hard timeout, CSV via write_text
 # ---------------------------------------------------------------------------
+
 
 _DEFAULT_KERNEL_TIMEOUT = 120
 
@@ -529,7 +746,7 @@ def run_timing_phase(
     build_dir: Optional[pathlib.Path] = None,
     kernel_timeout: int = _DEFAULT_KERNEL_TIMEOUT,
     debug_kernel: Optional[str] = None,
-    raw_csv: Optional[pathlib.Path] = None,  # NEW: path for raw timings CSV
+    raw_csv: Optional[pathlib.Path] = None,
 ) -> None:
     so_path  = pathlib.Path(so_path)
     out_csv  = pathlib.Path(out_csv)
@@ -546,6 +763,11 @@ def run_timing_phase(
 
     print(f"  [timing] Using SIGNATURES ({len(signatures)} kernels)", flush=True)
 
+    default_vec_info = {
+        "vectorized": False, "vec_count": 0, "missed_count": 0,
+        "remark_vectorized": False, "remark_mismatch": False,
+    }
+
     # ---- single-kernel debug mode ----
     if debug_kernel:
         base = re.sub(r"[_]?[df](single)?$", "", debug_kernel)
@@ -556,7 +778,7 @@ def run_timing_phase(
             return
         sym        = f"{base}{sym_suffix}"
         serial_sig = _serialise_sig(sig)
-        vec_info   = vec_info_map.get(base) or {"vectorized": False, "vec_count": 0, "missed_count": 0}
+        vec_info   = vec_info_map.get(base) or default_vec_info
         work_item  = (str(so_path), sym, base, serial_sig, pool_data, is_float, reps, vec_info)
         result     = _time_one_kernel_worker(work_item)
         sym_r, base_r, payload = result
@@ -564,13 +786,15 @@ def run_timing_phase(
             print(f"  [debug] FAIL {sym_r} — {payload}", flush=True)
         else:
             med, mn, sd, vi, raw = payload
-            print(f"  [debug] ok  {sym_r}  median={med/1e3:.1f}µs  min={mn/1e3:.1f}µs", flush=True)
+            mismatch = "  [MISMATCH]" if vi.get("remark_mismatch") else ""
+            print(f"  [debug] ok  {sym_r}  median={med/1e3:.1f}µs  min={mn/1e3:.1f}µs{mismatch}", flush=True)
         return
 
     # ---- full sweep ----
     rows: list = []
-    raw_rows: list = []  # NEW: accumulates (kernel, rep_index, timing_ns) tuples
+    raw_rows: list = []
     n_skipped  = 0
+    n_mismatch = 0
 
     work_items = []
     for base, sig in sorted(signatures.items()):
@@ -579,7 +803,7 @@ def run_timing_phase(
         vec_info   = (
             vec_info_map.get(base)
             or vec_info_map.get(sym)
-            or {"vectorized": False, "vec_count": 0, "missed_count": 0}
+            or default_vec_info
         )
         work_items.append((str(so_path), sym, base, serial_sig, pool_data, is_float, reps, vec_info))
 
@@ -600,11 +824,14 @@ def run_timing_phase(
                     print(f"SKIP — {payload}", flush=True)
                     n_skipped += 1
                 else:
-                    med, mn, sd, vec_info, timings = payload  # unpack raw timings
+                    med, mn, sd, vec_info, timings = payload
                     vec_tag = "VEC" if vec_info["vectorized"] else "---"
-                    print(f"ok  median={med/1e3:.1f}µs  min={mn/1e3:.1f}µs  [{vec_tag}]", flush=True)
+                    mismatch_tag = ""
+                    if vec_info.get("remark_mismatch"):
+                        mismatch_tag = "  [MISMATCH: remark disagreed with assembly]"
+                        n_mismatch += 1
+                    print(f"ok  median={med/1e3:.1f}µs  min={mn/1e3:.1f}µs  [{vec_tag}]{mismatch_tag}", flush=True)
                     rows.append((sym_r, med, mn, sd, vec_info))
-                    # Accumulate raw timings rows
                     for rep_idx, t_ns in enumerate(timings):
                         raw_rows.append((sym_r, rep_idx, t_ns))
 
@@ -626,20 +853,20 @@ def run_timing_phase(
         mp_pool.terminate()
         mp_pool.join()
 
-    # Write aggregated summary CSV (unchanged format)
+    # Write aggregated summary CSV
     out_csv.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["kernel,median_ns,min_ns,stdev_ns,vectorized,vec_count,missed_count"]
+    lines = ["kernel,median_ns,min_ns,stdev_ns,vectorized,vec_count,missed_count,remark_vectorized,remark_mismatch"]
     for kernel, med, mn, std, vec_info in sorted(rows, key=lambda r: r[0]):
         lines.append(
             f"{kernel},{med:.2f},{mn:.2f},{std:.2f},"
             f"{'1' if vec_info['vectorized'] else '0'},"
             f"{vec_info['vec_count']},"
-            f"{vec_info['missed_count']}"
+            f"{vec_info['missed_count']},"
+            f"{'1' if vec_info.get('remark_vectorized') else '0'},"
+            f"{'1' if vec_info.get('remark_mismatch') else '0'}"
         )
     out_csv.write_text("\n".join(lines) + "\n")
 
-    # Write raw timings CSV
-    # Derive raw_csv path from out_csv if not explicitly provided
     if raw_csv is None:
         raw_csv = out_csv.with_name(out_csv.stem + "_raw_timings.csv")
     raw_csv = pathlib.Path(raw_csv)
@@ -654,12 +881,15 @@ def run_timing_phase(
         f" -> {out_csv}",
         flush=True,
     )
+    if n_mismatch:
+        print(f"  [timing] WARNING: {n_mismatch} kernel(s) had remark/assembly vectorization mismatches", flush=True)
     print(f"  [timing] raw timings ({len(raw_rows)} rows) -> {raw_csv}", flush=True)
 
 
 # ---------------------------------------------------------------------------
 # main_compile_cpp
 # ---------------------------------------------------------------------------
+
 
 def main_compile_cpp(
     default_root: str,
@@ -678,7 +908,9 @@ def main_compile_cpp(
     ap.add_argument("-j", "--jobs",   type=int,    default=os.cpu_count())
     ap.add_argument("--pattern",                   default="*.cpp")
     ap.add_argument("--vec-report",   action="store_true",
-                    help="Capture vectorization remarks into build_dir/*.rpt files.")
+                    help="Capture vectorization remarks into build_dir/*.rpt files "
+                         "AND compile a matching *.vec_check.s assembly dump used "
+                         "as ground truth for the vectorized/mismatch verdict.")
     ap.add_argument("--vec-report-out", default=None, metavar="FILE",
                     help="Write vec-report summary text to FILE.")
     ap.add_argument("--time",         action="store_true",
@@ -687,7 +919,7 @@ def main_compile_cpp(
                     help="Write merged timing+vec CSV to FILE.")
     ap.add_argument("--raw-timing-out", default=None, metavar="FILE",
                     help="Write raw per-repetition timing CSV to FILE. "
-                         "Defaults to <timing-out stem>_raw_timings.csv.")  # NEW
+                         "Defaults to <timing-out stem>_raw_timings.csv.")
     ap.add_argument("--reps",         type=int, default=30, metavar="N")
     ap.add_argument("--len-1d",       type=int, default=1024, metavar="N", dest="len_1d")
     ap.add_argument("--kernel-timeout", type=int, default=_DEFAULT_KERNEL_TIMEOUT,
@@ -744,14 +976,26 @@ def main_compile_cpp(
     if args.vec_report:
         vec_detailed = parse_vec_reports_detailed(args.build_dir)
         if vec_detailed:
-            vec_count   = sum(1 for v in vec_detailed.values() if v["vectorized"])
-            header      = f"Vectorization report {vec_count}/{len(vec_detailed)} kernels vectorized"
-            lines       = [header]
+            vec_count = sum(1 for v in vec_detailed.values() if v["vectorized"])
+            mismatch_count = sum(1 for v in vec_detailed.values() if v.get("remark_mismatch"))
+            header = (
+                f"Vectorization report (assembly-verified): "
+                f"{vec_count}/{len(vec_detailed)} kernels vectorized"
+            )
+            lines = [header]
+            if mismatch_count:
+                lines.append(
+                    f"  *** {mismatch_count} kernel(s) had a remark/assembly mismatch "
+                    f"(compiler claimed one thing, machine code showed another) ***"
+                )
             for name, info in sorted(vec_detailed.items()):
                 tag = "VEC" if info["vectorized"] else "---"
+                mismatch_flag = " [MISMATCH]" if info.get("remark_mismatch") else ""
                 lines.append(
                     f"  [{tag}] {name}  "
-                    f"(vec={info['vec_count']}, missed={info['missed_count']})"
+                    f"(vec={info['vec_count']}, missed={info['missed_count']}, "
+                    f"remark_said_vec={'yes' if info.get('remark_vectorized') else 'no'})"
+                    f"{mismatch_flag}"
                 )
             report_text = "\n".join(lines)
             print(report_text)
@@ -764,7 +1008,7 @@ def main_compile_cpp(
             out_rpt.write_text(report_text)
             print(f"Saved vec report -> {out_rpt}", flush=True)
         else:
-            print("vec-report: No .rpt files found — recompile to generate them.", flush=True)
+            print("vec-report: No .rpt/.vec_check.s files found — recompile to generate them.", flush=True)
 
     # ---- timing phase ----
     if args.time:
@@ -774,7 +1018,7 @@ def main_compile_cpp(
         )
         raw_timing_out = (
             pathlib.Path(args.raw_timing_out) if args.raw_timing_out
-            else None  # run_timing_phase will auto-derive from timing_out
+            else None
         )
         signatures = _load_signatures(root, so)
         if signatures is None:
@@ -797,7 +1041,7 @@ def main_compile_cpp(
                 build_dir      = build_dir,
                 kernel_timeout = args.kernel_timeout,
                 debug_kernel   = args.debug_kernel,
-                raw_csv        = raw_timing_out,  # NEW
+                raw_csv        = raw_timing_out,
             )
 
     print(f"Done in {_time.perf_counter() - t0:.1f}s", flush=True)
