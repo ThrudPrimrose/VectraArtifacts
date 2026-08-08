@@ -93,8 +93,10 @@ BASELINE_FLAGS: Tuple[str, ...] = (
     "-O3",
     "-std=c++17",
     "-fPIC",
-    "-ffast-math",
+    #"-ffast-math",
     "-fno-math-errno",
+    "-ffinite-math-only",  
+    "-fno-signaling-nans",
     "-fstrict-aliasing",
     "-faligned-new",
 )
@@ -107,7 +109,7 @@ _DELTAS: Dict[Tuple[Compiler, CostModel], Tuple[str, ...]] = {
     (Compiler.CLANG, CostModel.UNLIMITED): ("-fvectorize", "-fvect-cost-model=none"),
     (Compiler.CLANG, CostModel.DISABLED):  ("-fno-vectorize", "-fno-slp-vectorize"),
 
-    (Compiler.GCC, CostModel.DEFAULT):   (),
+    (Compiler.GCC, CostModel.DEFAULT):   ("-fvect-cost-model=dynamic",),
     (Compiler.GCC, CostModel.CHEAP):     ("-mprefer-vector-width=__VEC_WIDTH__",),
     (Compiler.GCC, CostModel.UNLIMITED): ("-ftree-vectorize", "-fvect-cost-model=unlimited"),
     (Compiler.GCC, CostModel.DISABLED):  ("-fno-tree-vectorize", "-fno-tree-slp-vectorize"),
@@ -146,28 +148,37 @@ _ICPX_WIDTH_FLAG_FOR_WIDTH: Dict[int, str] = {
 # Purely diagnostic — never affect vectorization decisions.
 # Output goes to stderr. GCC supports -fopt-info-vec=<file> for per-file
 # redirection; Clang saves a YAML opt-record via -fsave-optimization-record.
-
+#
+# Deliberately NOT restricted to the loop-vectorize pass: Clang/icpx run loop
+# vectorization and SLP (basic-block) vectorization as two SEPARATE passes
+# ("loop-vectorize" vs "slp-vectorize"), so "-Rpass=loop-vectorize" silently
+# drops every SLP-vectorized kernel's remarks (a real false-negative source —
+# a kernel can come back all-scalar under the loop vectorizer's own remarks
+# while its SLP pass quietly vectorized it, or vice versa). "-Rpass=.*" (an
+# extended regex, not a shell glob) reports every pass so nothing is missed.
+# Likewise GCC's "-fopt-info-vec-*" only covers its vectorizer's own remarks;
+# "-fopt-info-all" dumps every pass's optimized/missed/note diagnostics.
 _REMARK_FLAGS: Dict[Compiler, Tuple[str, ...]] = {
     Compiler.CLANG: (
-        "-Rpass=loop-vectorize",
-        "-Rpass-missed=loop-vectorize",
-        "-Rpass-analysis=loop-vectorize",
+        "-Rpass=.*",
+        "-Rpass-missed=.*",
+        "-Rpass-analysis=.*",
     ),
     Compiler.GCC: (
-        "-fopt-info-vec-optimized",
-        "-fopt-info-vec-missed",
+        "-fopt-info-all",
     ),
     Compiler.ICPX: (
-        "-Rpass=loop-vectorize",
-        "-Rpass-missed=loop-vectorize",
+        "-Rpass=.*",
+        "-Rpass-missed=.*",
+        "-Rpass-analysis=.*",
         "-qopt-report=5",
-        "-qopt-report-phase=vec",
+        "-qopt-report-phase=all",
     ),
 }
 
 # Templates for redirecting remarks to a file (use {path} placeholder)
 _REMARK_FILE_FLAGS: Dict[Compiler, str] = {
-    Compiler.GCC:   "-fopt-info-vec={path}",
+    Compiler.GCC:   "-fopt-info-all={path}",
     Compiler.CLANG: "-fsave-optimization-record -foptimization-record-file={path}",
     Compiler.ICPX:  "-qopt-report-file={path}",
 }

@@ -51,6 +51,8 @@ except ImportError:
     COMPILE_FLAGS = ["-O3", "-std=c++17", "-fPIC", "-march=native"]
     LINK_FLAGS    = ["-shared"]
 
+from vectra_artifacts.compilers import flags as _flags
+
 
 # ---------------------------------------------------------------------------
 # ctypes shorthands
@@ -196,98 +198,12 @@ VECRE = _VEC_OPTIMIZED_RE
 # ---------------------------------------------------------------------------
 # Assembly-based ground-truth vectorization detection
 # ---------------------------------------------------------------------------
-# AArch64: NEON vector registers (v0.2d, v1.16b, ...), SVE Z/P registers
-# (z0.d, p7/z), quad registers used for 128-bit vector load/store/move (q0),
-# and SVE-specific mnemonics (predicate generation, structured loads, etc).
-_AARCH64_VEC_RE = re.compile(
-    r"\bv\d{1,2}\.\d*[bhsd]\b"                 # NEON vector reg w/ arrangement: v0.2d, v12.4s
-    r"|\bz\d{1,2}\.[bhsd]\b"                   # SVE Z register: z0.d, z26.d
-    r"|\bp\d{1,2}/[zm]\b"                      # SVE predicate governing a vector op: p7/z
-    r"|\bq\d{1,2}\b"                           # 128-bit quad register (vector load/store/move)
-    r"|\b(ld[1-4][bhwd]?|st[1-4][bhwd]?)\b"    # (SVE/NEON) structured / scalable load-store
-    r"|\bwhilelo\b|\bwhilelt\b|\bwhilels\b|\bwhilehs\b|\bwhilege\b|\bwhilegt\b"
-    r"|\bptrue\b|\bpfalse\b|\bmovprfx\b|\bfadda\b|\bfaddv\b|\blastb\b|\blasta\b"
-    r"|\bcntb\b|\bcntd\b|\bcnth\b|\bcntw\b",
-    re.IGNORECASE,
-)
-
-# x86: ymm/zmm registers are always vector (256/512-bit, never scalar). xmm
-# is ambiguous on its own (scalar addsd/mulsd also use xmm), so it only
-# counts when paired with a *packed* suffix (ps/pd) rather than scalar
-# (ss/sd), or with an explicit FMA-packed mnemonic.
-_X86_VEC_RE = re.compile(
-    r"%?[yz]mm\d{1,2}\b"
-    r"|%?xmm\d{1,2}\b.*\b\w*p[sd]\d*\b"
-    r"|\bvfmadd\d{3}p[sd]\b|\bvfmsub\d{3}p[sd]\b",
-    re.IGNORECASE,
-)
-
-# Symbols that are never the actual kernel loop body (runtime/support code)
-# — excluded from the scan so a stray vector instruction there can't
-# produce a false "vectorized" verdict for the kernel itself.
-_NON_KERNEL_SYMBOL_RE = re.compile(
-    r"GLOBAL__sub_I|_ZdlPv|_Znwm|system_clock|chrono",
-    re.IGNORECASE,
-)
-
-# Matches a function-start label in either objdump disassembly
-# ("0000000000000000 <name>:") or raw compiler -S assembly ("name:").
-_FUNC_LABEL_RE = re.compile(
-    r"^[0-9a-f]{8,16}\s+<(?P<obj_name>[^>]+)>:\s*$"
-    r"|^(?P<asm_name>[A-Za-z_$][\w$]*):\s*$"
-)
-
-
-def _split_into_functions(asm_text: str) -> list:
-    """Split raw assembly/disassembly text into (symbol_name, body) chunks."""
-    chunks = []
-    current_name = None
-    current_lines: list = []
-
-    for line in asm_text.splitlines():
-        m = _FUNC_LABEL_RE.match(line.strip())
-        if m:
-            if current_name is not None:
-                chunks.append((current_name, "\n".join(current_lines)))
-            current_name = m.group("obj_name") or m.group("asm_name")
-            current_lines = []
-        else:
-            current_lines.append(line)
-
-    if current_name is not None:
-        chunks.append((current_name, "\n".join(current_lines)))
-
-    if not chunks:
-        chunks = [("<unknown>", asm_text)]
-
-    return chunks
-
-
-def _parse_vec_from_asm(asm_text: str, *, kernel_functions_only: bool = True) -> dict:
-    """
-    Ground-truth vectorization check: scan actual assembly/machine code for
-    SIMD register/instruction usage, rather than trusting compiler remarks.
-    """
-    functions = _split_into_functions(asm_text)
-    vec_lines: list = []
-
-    for name, body in functions:
-        if kernel_functions_only and _NON_KERNEL_SYMBOL_RE.search(name):
-            continue
-        for line in body.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if _AARCH64_VEC_RE.search(stripped) or _X86_VEC_RE.search(stripped):
-                vec_lines.append(stripped)
-
-    return {
-        "vectorized":     len(vec_lines) > 0,
-        "vec_count":      len(vec_lines),
-        "missed_count":   0,  # not derivable from assembly alone
-        "sample_remarks": vec_lines[:5],
-        "source":         "assembly",
-    }
+# Shared with compile_dace.py via vec_ground_truth.py — see that module's
+# docstring for the function-label-matching bug this used to carry as two
+# separately-drifting copies (a real function's vectorized body could be
+# silently dropped from the scan entirely, producing a false "not
+# vectorized" verdict and a spurious remark_mismatch).
+from .vec_ground_truth import parse_vec_from_asm as _parse_vec_from_asm
 
 
 def _parse_vec_from_rpt(rpt_path: pathlib.Path) -> dict:
@@ -344,20 +260,20 @@ def _vec_info_for_object(build_dir: pathlib.Path, stem: str) -> dict:
 
 
 def vec_report_flag() -> List[str]:
+    """Remark flags baked into both the real -c compile (when vec_report=True)
+    and the matching -S ground-truth dump — see compile_object(). Sourced
+    from vectra_artifacts.compilers.flags's canonical, all-pass remark table
+    (not just the loop-vectorize pass) so e.g. SLP-vectorized kernels don't
+    silently vanish from remark_vectorized just because the loop vectorizer's
+    own remarks say scalar."""
     cxx = CXX.lower()
     if "clang" in cxx:
-        return [
-            "-Rpass=loop-vectorize",
-            "-Rpass-missed=loop-vectorize",
-            "-Rpass-analysis=loop-vectorize",
-        ]
-    if "icpx" in cxx or "icpc" in cxx:
-        return [
-            "-Rpass=loop-vectorize",
-            "-Rpass-missed=loop-vectorize",
-            "-Rpass-analysis=loop-vectorize",
-        ]
-    return ["-fopt-info-vec-all"]
+        compiler = _flags.Compiler.CLANG
+    elif "icpx" in cxx or "icpc" in cxx:
+        compiler = _flags.Compiler.ICPX
+    else:
+        compiler = _flags.Compiler.GCC
+    return list(_flags.get_remark_flags(compiler))
 
 
 def parse_vec_reports(build_dir) -> dict:

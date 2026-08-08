@@ -75,86 +75,21 @@ _PRECISION_PATTERNS: dict = {
 
 
 # ── Cost-model optimisation flags ─────────────────────────────────────────────
-_COST_MODEL_CXXFLAGS = {
-    "default":   "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
-    # "cheap":     "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fvectorize",
-    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros ",
-    "disabled":  "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-vectorize -fno-slp-vectorize",
-}
-_COST_MODEL_CXXFLAGS_GCC = {
-    "default":   "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -ftree-vectorize -fvect-cost-model=dynamic",
-    "cheap":     "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -ftree-vectorize -fvect-cost-model=cheap",
-    "unlimited": "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -fno-vect-cost-model",
-    "disabled":  "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans -fno-tree-vectorize",
-}
-
-
-# ── Vectorisation remark flags ─────────────────────────────────────────────────
-_VEC_REMARK_FLAGS = {
-    "clang": "-Rpass=.* -Rpass-missed=.*",
-    "gcc":   "-fopt-info-all",
-    "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
-}
-
-import platform as _platform
-
-# ── CPU → ISA-specific vectorization width config ─────────────────────────────
-# Each entry: (isa_family, native_width_bits)
-#   isa_family: "x86" -> use -mprefer-vector-width
-#               "sve" -> use -msve-vector-bits (ARM SVE cores)
-#               "neon" -> no ISA-level width knob; use LLVM -force-vector-width
-_CPU_ISA_INFO = {
-    "amd_epyc":        ("x86",  256),   # Zen2/3, AVX2, 256-bit native
-    "amd_epyc_genoa":  ("x86",  512),   # Zen4, AVX-512, 512-bit native
-    "intel_xeon":      ("x86",  512),   # Skylake+ AVX-512
-    "arm_grace":       ("sve",  128),   # Neoverse V2, SVE2 128-bit vectors
-    "fugaku_a64fx":    ("sve",  512),   # A64FX, SVE 512-bit vectors
-    "apple_m_series":  ("neon", 128),   # NEON only, 128-bit, no SVE
-    "ibm_power":       ("altivec", 128),# VSX/Altivec, 128-bit
-}
-
-# Fallback "elements-per-vector" used for -force-vector-width (LLVM internal,
-# expressed in elements, not bits — assume 32-bit float/int elements as base unit)
-def _force_vector_width_elems(width_bits: int) -> int:
-    return max(1, width_bits // 32)
-
-
-def _clang_vector_width_flags(cpu: str) -> str:
-    """
-    Return the correct Clang forced-vectorization-width flag(s) for a given
-    target CPU, matching its native ISA (x86 AVX*, ARM SVE, ARM NEON, POWER).
-    Used only for the 'unlimited' cost-model, where we want the vectorizer
-    to use the *maximum* natural width rather than whatever the cost model
-    picks.
-    """
-    info = _CPU_ISA_INFO.get(cpu)
-    if info is None:
-        return ""
-    isa_family, width_bits = info
-
-    if isa_family == "x86":
-        return f"-mprefer-vector-width={width_bits}"
-    elif isa_family == "sve":
-        return f"-msve-vector-bits={width_bits}"
-    else:
-        # NEON-only ARM (e.g. Apple M-series) or POWER/Altivec: no ISA-level
-        # width flag exists in Clang, so force it at the LLVM loop-vectorizer
-        # level directly, in elements.
-        elems = _force_vector_width_elems(width_bits)
-        return f"-mllvm -force-vector-width={elems}"
-
-
-def _host_arch_matches_target(cpu: str) -> bool:
-    """
-    Sanity check: warn (but don't fail) if the host machine's actual
-    architecture (arm64 vs x86_64) doesn't match the requested --cpus target,
-    since forced-width flags are only meaningful when compiling natively for
-    that ISA (no cross-compilation toolchain assumed here).
-    """
-    host_machine = _platform.machine().lower()
-    host_is_arm = host_machine in ("arm64", "aarch64")
-    target_is_arm = _CPU_ISA_INFO.get(cpu, ("x86", 0))[0] in ("sve", "neon")
-    return host_is_arm == target_is_arm
+# Single source of truth: vectra_artifacts.compilers.flags.get_flags(), the
+# SAME canonical (compiler, cost-model, cpu) matrix that vectra-source-sh
+# already uses to write CXX/CXX_COSTMODEL/EXTRA_FLAGS into source.sh for the
+# CPP build (via compiler_config.py). We reuse it here — rather than keeping
+# a second, hand-written flag table — so the DaCe build is compiled with
+# byte-identical optimisation flags to the CPP build for the "same" sweep
+# cell. A previous version of this file kept its own _COST_MODEL_CXXFLAGS /
+# _CPU_ISA_INFO tables that (a) disagreed with the canonical matrix and
+# (b) were only ever forwarded into DACE_compiler_cpu_args as diagnostic
+# remark flags — never the actual -O3/-march/-fvectorize flags — so
+# --cost-models and --cpus silently had *no effect* on DaCe's compiled
+# machine code. See _build_env() below.
+from vectra_artifacts.compilers import Compiler, CostModel, get_flags
+from vectra_artifacts.compilers.flags import get_remark_flags
+from vectra_artifacts.compilers.dace_setup import _DACE_MANAGED_COMPILE, _DACE_MANAGED_LINK
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -173,46 +108,65 @@ def _source_env(script_path: pathlib.Path) -> dict:
 
 
 def _build_env(env: dict, compiler: str, cost_model: str, cpu: str) -> dict:
-    """Apply macOS overrides, cost-model flags, remark flags, and
-    architecture-correct forced vector width (clang + unlimited only)."""
+    """
+    Resolve the canonical (compiler, cost-model, cpu) flag set and push it
+    into every env var the CPP *and* DaCe compile subprocesses actually
+    read, so both are built with the same flags for a given sweep cell.
+
+    - CPP: `python3 -m {tsvc_module}.compile_cpp_kernels` imports
+      compiler_config.py fresh, which re-resolves get_flags() itself from
+      CXX / CXX_COMPILER / CXX_COSTMODEL / CPU_NAME. We set those here too
+      (not just rely on the source.sh vectra-source-sh already wrote) so
+      this function is the one place that has to be right.
+    - DaCe: dace.config.Config treats DACE_compiler_cpu_executable /
+      DACE_compiler_cpu_args as full-replacement env overrides (see
+      dace/config.py's `DACE_<hierarchy>` lookup — it *replaces* the
+      config value, it does not merge with it). That means these two
+      vars must carry the *complete* resolved flag set, not just the
+      diagnostic remark flags, or --cost-models / --cpus silently has no
+      effect on DaCe's actual compiled/disassembled code.
+    """
     env = dict(env)
 
+    comp_enum = Compiler(compiler)
+    cm_enum   = CostModel(cost_model)
+    flag_set  = get_flags(comp_enum, cm_enum, cpu=cpu)
+
+    cxx_executable = flag_set.compiler.executable()
     if platform.system() == "Darwin":
         if compiler == "clang":
-            env["CXX"] = "clang++"
-            env["CXX_COMPILER"] = "clang"
-            env["DACE_compiler_cpu_executable"] = "clang++"
+            cxx_executable = "clang++"
         elif compiler == "gcc":
-            env["CXX"] = "/opt/homebrew/bin/g++-15"
-            env["CXX_COMPILER"] = "gcc"
-            env["DACE_compiler_cpu_executable"] = "/opt/homebrew/bin/g++-15"
+            # Plain "g++" on macOS is usually a Clang shim; force the real
+            # Homebrew GCC so compiler=="gcc" actually means GCC.
+            cxx_executable = "/opt/homebrew/bin/g++-15"
 
-    opt_flags = (
-        _COST_MODEL_CXXFLAGS_GCC if compiler == "gcc" else _COST_MODEL_CXXFLAGS
-    ).get(cost_model, "")
-    if opt_flags:
-        existing = env.get("CXXFLAGS", "")
-        env["CXXFLAGS"] = f"{opt_flags} {existing}".strip()
+    env["CXX"]           = cxx_executable
+    env["CXX_COMPILER"]  = compiler
+    env["CXX_COSTMODEL"] = cost_model
+    env["CPU_NAME"]      = cpu
 
-    # ── Forced vectorization width, arch-correct, clang + unlimited only ──
-    if compiler == "clang" and cost_model == "unlimited":
-        width_flag = _clang_vector_width_flags(cpu)
-        if width_flag:
-            if not _host_arch_matches_target(cpu):
-                print(
-                    f"  [warn] host arch {_platform.machine()} != target ISA "
-                    f"for cpu={cpu}; forced width flag may not apply natively",
-                    file=sys.stderr,
-                )
-            existing = env.get("CXXFLAGS", "")
-            env["CXXFLAGS"] = f"{existing} {width_flag}".strip()
+    remark_flags = list(get_remark_flags(comp_enum))
 
-    remark_flags = _VEC_REMARK_FLAGS.get(compiler, "")
-    if remark_flags:
-        env["CXXFLAGS"] = f"{env.get('CXXFLAGS', '')} {remark_flags}".strip()
-        env["DACE_compiler_cpu_args"] = (
-            f"{env.get('DACE_compiler_cpu_args', '')} {remark_flags}".strip()
-        )
+    dace_compile_flags = [f for f in flag_set.compile_flags if f not in _DACE_MANAGED_COMPILE]
+    env["DACE_compiler_cpu_executable"] = cxx_executable
+    env["DACE_compiler_cpu_args"] = " ".join(dace_compile_flags + remark_flags).strip()
+
+    dace_link_flags = [f for f in flag_set.link_flags if f not in _DACE_MANAGED_LINK]
+    if dace_link_flags:
+        env["DACE_compiler_cpu_libs"] = " ".join(dace_link_flags)
+
+    # Only consumed by compile_dace.py's diagnostic -S re-run
+    # (_extra_flags_from_env), which appends CXXFLAGS *after* the flags it
+    # already parsed out of the real build's flags.make. Must reuse the
+    # same _DACE_MANAGED_COMPILE-filtered list (not the raw compile_flags):
+    # flag_set.compile_flags still carries "-std=c++17", and since the LAST
+    # -std= flag on a clang/gcc command line wins, that would silently
+    # downgrade the diagnostic recompile below the C++20 DaCe's own
+    # generated headers require (e.g. std::bit_cast) — the -S step would
+    # then fail outright, vec_check.s would never be written, and every
+    # kernel would misreport as "not vectorized" regardless of cost-model.
+    env["CXXFLAGS"] = " ".join(dace_compile_flags + remark_flags).strip()
 
     return env
 
