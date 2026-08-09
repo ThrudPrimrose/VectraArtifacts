@@ -39,7 +39,9 @@ AARCH64_VEC_RE = re.compile(
     r"|\b(ld[1-4][bhwd]?|st[1-4][bhwd]?)\b"    # (SVE/NEON) structured / scalable load-store
     r"|\bwhilelo\b|\bwhilelt\b|\bwhilels\b|\bwhilehs\b|\bwhilege\b|\bwhilegt\b"
     r"|\bptrue\b|\bpfalse\b|\bmovprfx\b|\bfadda\b|\bfaddv\b|\blastb\b|\blasta\b"
-    r"|\bcntb\b|\bcntd\b|\bcnth\b|\bcntw\b",
+    r"|\bcntb\b|\bcntd\b|\bcnth\b|\bcntw\b"
+    r"|\buzp[12]\b|\bzip[12]\b|\bext\s+v\d"    # NEON shuffle instructions (SLP realignment)
+    r"|\bvect__?\d",                            # GCC SLP-vectorizer synthetic var names (fallback text form)
     re.IGNORECASE,
 )
 

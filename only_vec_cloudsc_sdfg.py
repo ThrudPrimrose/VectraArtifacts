@@ -54,32 +54,18 @@ ALL_CPUS = (
 )
 
 
-_BASE_MODEL_CLANG = "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros"
-_BASE_MODEL_GCC = "-O3 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros -fno-signaling-nans"
-
-
-#Has to be -O0, since Clang will override the disbale vector flags when set to -O3.
-_BASE_MODEL_CLANG_DISABLED = "-O0 -march=native -fno-math-errno -fno-trapping-math -fno-signed-zeros"
-
-
-
-_COST_MODEL_CXXFLAGS = {
-    "disabled":  "-fno-vectorize -fno-slp-vectorize",
-    # "cheap":     "-fvectorize -mllvm -vectorizer-min-trip-count=64",
-    "default":   "-fvectorize",
-    "unlimited": "-Rpass-analysis=loop-vectorize",
-}
-_COST_MODEL_CXXFLAGS_GCC = {
-    "disabled":  "-fno-tree-vectorize",
-    "cheap":     "-ftree-vectorize -fvect-cost-model=cheap",
-    "default":   "-ftree-vectorize -fvect-cost-model=dynamic",
-    "unlimited": "-fno-vect-cost-model",
-}
-_VEC_REMARK_FLAGS = {
-    "clang": "-Rpass=.* -Rpass-missed=.*",
-    "gcc":   "-fopt-info-all",
-    "icpx":  "-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -qopt-report=5 -qopt-report-phase=vec",
-}
+# Cost-model / baseline optimisation flags: single source of truth is
+# vectra_artifacts.compilers.flags.get_flags() — the SAME canonical
+# (compiler, cost-model, cpu) matrix only_vec.py uses. This file used to
+# keep its own hand-written _BASE_MODEL_* / _COST_MODEL_CXXFLAGS* /
+# _VEC_REMARK_FLAGS tables that (a) disagreed with the canonical matrix and
+# (b) never varied by --cpus at all (cpu was accepted on the CLI, threaded
+# into the *sourced* env script, and then silently dropped — _build_env()
+# never took a cpu argument), so the --cpus sweep had zero effect on the
+# actual compiled flags. See _build_env() below.
+from vectra_artifacts.compilers import Compiler, CostModel, get_flags
+from vectra_artifacts.compilers.flags import get_remark_flags
+from vectra_artifacts.compilers.dace_setup import _DACE_MANAGED_COMPILE, _DACE_MANAGED_LINK
 
 
 # Fortran compiler candidates per C++ compiler family (tried in order).
@@ -135,99 +121,18 @@ WHY_RE = re.compile(
 
 
 # ── Assembly-based ground-truth vectorization detection ───────────────────────
-# AArch64: NEON vector registers (v0.2d, v1.16b, ...), SVE Z/P registers
-# (z0.d, p7/z), quad registers used for 128-bit vector load/store/move (q0),
-# and SVE-specific mnemonics (predicate generation, structured loads, etc).
-_AARCH64_VEC_RE = re.compile(
-    r"\bv\d{1,2}\.\d*[bhsd]\b"                 # NEON vector reg w/ arrangement: v0.2d, v12.4s
-    r"|\bz\d{1,2}\.[bhsd]\b"                   # SVE Z register: z0.d, z26.d
-    r"|\bp\d{1,2}/[zm]\b"                      # SVE predicate governing a vector op: p7/z
-    r"|\bq\d{1,2}\b"                           # 128-bit quad register (vector load/store/move)
-    r"|\b(ld[1-4][bhwd]?|st[1-4][bhwd]?)\b"    # (SVE/NEON) structured / scalable load-store
-    r"|\bwhilelo\b|\bwhilelt\b|\bwhilels\b|\bwhilehs\b|\bwhilege\b|\bwhilegt\b"
-    r"|\bptrue\b|\bpfalse\b|\bmovprfx\b|\bfadda\b|\bfaddv\b|\blastb\b|\blasta\b"
-    r"|\bcntb\b|\bcntd\b|\bcnth\b|\bcntw\b"
-    r"|\buzp[12]\b|\bzip[12]\b|\bext\s+v\d"    # NEON shuffle instructions (SLP realignment)
-    r"|\bvect__?\d",                            # GCC SLP-vectorizer synthetic var names (fallback text form)
-    re.IGNORECASE,
-)
-
-# x86: ymm/zmm registers are always vector (256/512-bit, never scalar). xmm
-# is ambiguous on its own (scalar addsd/mulsd also use xmm), so it only
-# counts when paired with a *packed* suffix (ps/pd) rather than scalar
-# (ss/sd), or with an explicit FMA-packed mnemonic.
-_X86_VEC_RE = re.compile(
-    r"%?[yz]mm\d{1,2}\b"
-    r"|%?xmm\d{1,2}\b.*\b\w*p[sd]\d*\b"
-    r"|\bvfmadd\d{3}p[sd]\b|\bvfmsub\d{3}p[sd]\b",
-    re.IGNORECASE,
-)
-
-# Symbols that are never the actual kernel loop body (runtime/support code)
-# — excluded from the scan so a stray vector instruction there can't
-# produce a false "vectorized" verdict for the kernel itself.
-_NON_KERNEL_SYMBOL_RE = re.compile(
-    r"dace_init|dace_exit|GLOBAL__sub_I|dacestub|_ZdlPv|_Znwm|"
-    r"system_clock|chrono",
-    re.IGNORECASE,
-)
-
-# Matches a function-start label in either objdump disassembly
-# ("0000000000000000 <name>:") or raw compiler -S assembly ("name:").
-_FUNC_LABEL_RE = re.compile(
-    r"^[0-9a-f]{8,16}\s+<(?P<obj_name>[^>]+)>:\s*$"
-    r"|^(?P<asm_name>[A-Za-z_$][\w$]*):\s*$"
-)
-
-
-def _split_into_functions(asm_text: str) -> list:
-    """Split raw assembly/disassembly text into (symbol_name, body) chunks."""
-    chunks = []
-    current_name = None
-    current_lines: list = []
-
-    for line in asm_text.splitlines():
-        m = _FUNC_LABEL_RE.match(line.strip())
-        if m:
-            if current_name is not None:
-                chunks.append((current_name, "\n".join(current_lines)))
-            current_name = m.group("obj_name") or m.group("asm_name")
-            current_lines = []
-        else:
-            current_lines.append(line)
-
-    if current_name is not None:
-        chunks.append((current_name, "\n".join(current_lines)))
-
-    if not chunks:
-        chunks = [("<unknown>", asm_text)]
-
-    return chunks
-
-
-def _parse_vec_from_asm(asm_text: str, *, kernel_functions_only: bool = True) -> dict:
-    """
-    Ground-truth vectorization check: scan actual assembly/machine code for
-    SIMD register/instruction usage, rather than trusting compiler remarks.
-    """
-    functions = _split_into_functions(asm_text)
-    vec_lines: list = []
-
-    for name, body in functions:
-        if kernel_functions_only and _NON_KERNEL_SYMBOL_RE.search(name):
-            continue
-        for line in body.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            if _AARCH64_VEC_RE.search(stripped) or _X86_VEC_RE.search(stripped):
-                vec_lines.append(stripped)
-
-    return {
-        "vectorized":  len(vec_lines) > 0,
-        "vec_count":   len(vec_lines),
-        "samples":     vec_lines[:5],
-    }
+# Shared with the TSVC pipeline (compile_cpp.py / compile_dace.py) via
+# vec_ground_truth.py — this file used to keep a fourth independent copy of
+# the same scan, with the same function-label-matching bug: the label regex
+# required nothing but whitespace after the ":", which Apple clang's -S
+# output never satisfies (it appends "; @funcname" / "; comment" to nearly
+# every label), and everything accumulated before the first label that DID
+# match was silently discarded rather than kept. A vectorized loop body
+# landing before that first lucky match — common, since it's often the
+# function's own entry label that fails — would disappear entirely from the
+# scan and misreport as "not vectorized" with a spurious remark_mismatch.
+# See vec_ground_truth.py's docstring for the concrete case that surfaced it.
+from vectra_artifacts.corpus_build.vec_ground_truth import parse_vec_from_asm as _parse_vec_from_asm
 
 
 def _asm_verdict_from_file(asm_file: pathlib.Path) -> Optional[dict]:
@@ -276,41 +181,75 @@ def _source_env(script_path: pathlib.Path) -> dict:
 
 
 
-def _build_env(env: dict, compiler: str, cost_model: str) -> dict:
+def _build_env(env: dict, compiler: str, cost_model: str, cpu: str) -> dict:
+    """
+    Resolve the canonical (compiler, cost-model, cpu) flag set — the same
+    one only_vec.py uses — and push it into CXXFLAGS / DACE_compiler_cpu_*.
+
+    cpu now actually participates (it didn't before: this function silently
+    dropped it, so --cpus only affected the *sourced* env script's unused
+    EXTRA_FLAGS, never the flags this pipeline actually compiles with).
+    """
     env = dict(env)
+
+    comp_enum = Compiler(compiler)
+    cm_enum   = CostModel(cost_model)
+    flag_set  = get_flags(comp_enum, cm_enum, cpu=cpu)
+
+    cxx_executable = flag_set.compiler.executable()
     if platform.system() == "Darwin":
         if compiler == "clang":
-            env["CXX"] = "clang++"
-            env["CXX_COMPILER"] = "clang"
-            env["DACE_compiler_cpu_executable"] = "clang++"
+            cxx_executable = "clang++"
         elif compiler == "gcc":
-            env["CXX"] = "/opt/homebrew/bin/g++-15"
-            env["CXX_COMPILER"] = "gcc"
-            env["DACE_compiler_cpu_executable"] = "/opt/homebrew/bin/g++-15"
+            cxx_executable = "/opt/homebrew/bin/g++-15"
 
+    env["CXX"]           = cxx_executable
+    env["CXX_COMPILER"]  = compiler
+    env["CXX_COSTMODEL"] = cost_model
+    env["CPU_NAME"]      = cpu
 
-    opt_flags = (_COST_MODEL_CXXFLAGS_GCC if compiler == "gcc" else _COST_MODEL_CXXFLAGS).get(cost_model, "")
-    remark_flags = _VEC_REMARK_FLAGS.get(compiler, "")
+    compile_flags = list(flag_set.compile_flags)
+    if compiler == "clang" and cost_model == "disabled":
+        # Empirically-found CloudSC-specific override (predates this
+        # refactor — kept as-is rather than assumed away): on these larger
+        # generated kernels, Clang has been observed to re-enable
+        # vectorization at -O3 regardless of where -fno-vectorize /
+        # -fno-slp-vectorize sit in the flag order, so "disabled" only
+        # reliably produces scalar code at -O0. This doesn't reproduce on
+        # the small TSVC microkernels (only_vec.py's own smoke-tested
+        # -O3 + -fno-vectorize is enough there), which is presumably why
+        # the canonical flag matrix doesn't special-case it.
+        compile_flags = ["-O0" if f == "-O3" else f for f in compile_flags]
 
+    remark_flags = list(get_remark_flags(comp_enum))
 
-    if compiler == "gcc":
-        base_and_opt = f"{_BASE_MODEL_GCC} {opt_flags}".strip()
-    else:
-        if cost_model == "disabled":
-            base_and_opt = f"{_BASE_MODEL_CLANG_DISABLED} {opt_flags}".strip()
-        else:
-            base_and_opt = f"{_BASE_MODEL_CLANG} {opt_flags}".strip()
+    dace_compile_flags = [f for f in compile_flags if f not in _DACE_MANAGED_COMPILE]
+    env["DACE_compiler_cpu_executable"] = cxx_executable
+    # dace.config.Config passes DACE_compiler_cpu_args through as a single
+    # string value (unlike flags.make/argv, which are space-split before
+    # exec), and "-mllvm <arg>" only round-trips correctly as two separate
+    # argv tokens — so it has to be stripped here specifically.
+    env["DACE_compiler_cpu_args"] = _strip_mllvm_flags(
+        " ".join(dace_compile_flags + remark_flags)
+    ).strip()
 
+    dace_link_flags = [f for f in flag_set.link_flags if f not in _DACE_MANAGED_LINK]
+    if dace_link_flags:
+        env["DACE_compiler_cpu_libs"] = " ".join(dace_link_flags)
 
-    # Put existing CXXFLAGS FIRST, then our base+opt flags LAST so
-    # cost-model flags (e.g. -fno-vectorize) always win the "last flag wins"
-    # resolution clang applies to conflicting -f(no-)vectorize toggles.
-    existing = env.get("CXXFLAGS", "").strip()
-    if base_and_opt:
-        env["CXXFLAGS"] = f"{existing} {base_and_opt}".strip()
-    if remark_flags:
-        env["CXXFLAGS"] = f"{env.get('CXXFLAGS', '')} {remark_flags}".strip()
-        env["DACE_compiler_cpu_args"] = f"{env.get('DACE_compiler_cpu_args', '')} {_strip_mllvm_flags(base_and_opt)} {remark_flags}".strip()
+    # CXXFLAGS: consumed by recompile_for_remarks()/_patch_flags_make() (to
+    # re-append cost-model flags, stripped of remark tokens, at the end of
+    # flags.make's CXX_FLAGS — see _override_flags) and by
+    # generate_dace_asm()'s -S ground-truth re-run. -mllvm pairs are kept
+    # intact here since both consumers pass this through a real argv/
+    # space-split flags.make line, not a single opaque config string. Must
+    # stay the _DACE_MANAGED_COMPILE-filtered list (no "-std=c++17"): DaCe's
+    # own generated code needs -std=gnu++20 (std::bit_cast etc.), and since
+    # this string gets appended *after* flags.make's already-recorded
+    # -std=gnu++20, the last -std= flag on the line would otherwise win and
+    # break the real (not just diagnostic) recompile.
+    env["CXXFLAGS"] = " ".join(dace_compile_flags + remark_flags).strip()
+
     return env
 
 
@@ -545,24 +484,35 @@ def _parse_flags_make_for_asm(flags_make: pathlib.Path) -> tuple[str, list[str],
 
 
 def _find_kernel_source_and_flags_make(
-    cmake_build: pathlib.Path, kernel_stem: str
+    build_folder: pathlib.Path, kernel_stem: str
 ) -> tuple[Optional[pathlib.Path], Optional[pathlib.Path]]:
     """Locate the kernel's own .cpp source file (preferring an exact stem
     match, excluding dacestub) and the flags.make governing its compile
-    unit, under a DaCe-generated cmake build tree."""
+    unit, under a DaCe build_folder.
+
+    Must search from *build_folder* itself, not build_folder/"build": DaCe
+    writes the generated .cpp to build_folder/src/cpu/*.cpp, a SIBLING of
+    build_folder/build/ (the CMake build tree), not a descendant of it. This
+    used to search from build_folder/"build" only, so .rglob() could never
+    reach src/cpu/ — every call silently returned (None, None) — meaning
+    generate_dace_asm() never actually generated vec_check.s for the DaCe/
+    C++ path, and every kernel misreported as "not vectorized" (ground
+    truth "unavailable", not a real scalar verdict) regardless of what
+    actually got compiled. flags.make is still found correctly either way
+    since it genuinely lives under build_folder/build/, a real descendant."""
     src_cpp: Optional[pathlib.Path] = None
     exact_matches = [
-        c for c in cmake_build.rglob(f"{kernel_stem}*.cpp")
+        c for c in build_folder.rglob(f"{kernel_stem}*.cpp")
         if "dacestub" not in c.name
     ]
     if exact_matches:
         src_cpp = max(exact_matches, key=lambda p: len(p.parts))
     else:
-        cpu_matches = sorted(cmake_build.rglob("src/cpu/*.cpp"), key=lambda p: len(p.parts), reverse=True)
+        cpu_matches = sorted(build_folder.rglob("src/cpu/*.cpp"), key=lambda p: len(p.parts), reverse=True)
         if cpu_matches:
             src_cpp = cpu_matches[0]
         else:
-            for c in cmake_build.rglob("*.cpp"):
+            for c in build_folder.rglob("*.cpp"):
                 if "CMakeFiles" in str(c) or "/sample/" in str(c):
                     continue
                 src_cpp = c
@@ -572,11 +522,11 @@ def _find_kernel_source_and_flags_make(
         return None, None
 
     flags_make: Optional[pathlib.Path] = None
-    candidates = [f for f in cmake_build.rglob("flags.make") if "dacestub" not in f.parts[-2]]
+    candidates = [f for f in build_folder.rglob("flags.make") if "dacestub" not in f.parts[-2]]
     if candidates:
         flags_make = max(candidates, key=lambda p: len(p.parts))
-    elif list(cmake_build.rglob("flags.make")):
-        flags_make = max(cmake_build.rglob("flags.make"), key=lambda p: len(p.parts))
+    elif list(build_folder.rglob("flags.make")):
+        flags_make = max(build_folder.rglob("flags.make"), key=lambda p: len(p.parts))
 
     return src_cpp, flags_make
 
@@ -592,7 +542,7 @@ def generate_dace_asm(build_folder: pathlib.Path, out_dir: pathlib.Path, sdfg_st
     if not cmake_build.is_dir():
         return None
 
-    src_cpp, flags_make = _find_kernel_source_and_flags_make(cmake_build, sdfg_stem)
+    src_cpp, flags_make = _find_kernel_source_and_flags_make(build_folder, sdfg_stem)
     if src_cpp is None or flags_make is None:
         return None
 
@@ -788,7 +738,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                     cell = f"{compiler}_{cpu}_{cost_model}"
                     print(f"[{bench_name}] {cell} :: {sdfg_path.name}")
                     script_path = ensure_env_script(cell, compiler, cost_model, cpu)
-                    env = _build_env(_source_env(script_path), compiler, cost_model)
+                    env = _build_env(_source_env(script_path), compiler, cost_model, cpu)
                     # print("=== CXXFLAGS ===", env.get("CXXFLAGS"))
                     # print("=== DACE_compiler_cpu_args ===", env.get("DACE_compiler_cpu_args"))
                     out_dir = bench_dir / "vec_reports" / sdfg_path.stem / cell
