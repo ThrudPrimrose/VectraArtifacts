@@ -43,6 +43,7 @@ import argparse
 import importlib.util
 import os
 import re
+import shutil
 import statistics
 import sys
 import time
@@ -133,7 +134,7 @@ def write_raw_data(variant, rows, compiler, cost_model, cluster):
     return path
 
 
-def dace_lane(mod, variant, frontend, arrays, reps):
+def dace_lane(mod, variant, frontend, arrays, reps, compiler=None, cost_model=None):
     """Run the compiled SDFG under Timer instrumentation, returning (outputs, cold_us, timed_us)."""
     import dace
     from dace.config import Config
@@ -142,6 +143,22 @@ def dace_lane(mod, variant, frontend, arrays, reps):
     # durations come out of the instrumentation itself. Must precede codegen.
     Config.set("instrumentation", "report_each_invocation", value=False)
     sdfg = dace.SDFG.from_file(regen_sdfgs.sdfg_path(variant, frontend))
+    # Isolate this cell's compiled build from every other (compiler, cost-model) cell.
+    # Left at DaCe's default, every cell for a given variant/frontend shares the exact
+    # same build_folder (.dacecache/<variant>_<frontend>_frontend/build) regardless of
+    # compiler or cost-model -- so two cells compiling at once (e.g. a clang sweep job
+    # and a gcc sweep job overlapping in time) raced on os.makedirs() for that shared
+    # directory (FileExistsError: .../build) and could just as easily have silently
+    # linked one cell's .so against another's half-written .o instead of failing loudly.
+    # Scoping the folder per cell removes the possibility outright, independent of how
+    # carefully the sweep jobs are sequenced. Cleared before every compile (not just
+    # left to accumulate) so a stale .o from a previous run of this exact cell can't
+    # silently survive into a "clean" rebuild -- scoped to only this cell's own folder,
+    # so unlike a blanket `rm -rf .dacecache` in the caller, this can never touch a
+    # different, concurrently-running cell's build directory.
+    if compiler and cost_model:
+        sdfg.build_folder = os.path.join(HERE, ".dacecache", f"{sdfg.name}_{compiler}_{cost_model}")
+        shutil.rmtree(sdfg.build_folder, ignore_errors=True)
     sdfg.instrument = dace.InstrumentationType.Timer
     sdfg.clear_instrumentation_reports()
     csdfg = sdfg.compile()
@@ -195,7 +212,7 @@ def bench(variant, frontends, reps, regen, compiler, cost_model, cluster):
     raw_rows.append(("original Fortran", timed))
 
     for frontend in frontends:
-        got, cold, timed = dace_lane(mod, variant, frontend, arrays, reps)
+        got, cold, timed = dace_lane(mod, variant, frontend, arrays, reps, compiler, cost_model)
         ok, msg = native.compare(f"DaCe {frontend}-frontend vs NumPy", ref, got, mod.RTOL)
         rows.append((f"DaCe {frontend}-frontend", stats_us(timed), cold, ok, msg))
         raw_rows.append((f"DaCe {frontend}-frontend", timed))
