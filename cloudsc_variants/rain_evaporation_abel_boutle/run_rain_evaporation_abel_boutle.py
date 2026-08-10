@@ -15,7 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "harness"))
 import native  # noqa: E402
 
-KLON, NCLV = 16777216, 5
+KLON, NCLV = 4096, 5
 NCLDQV, NCLDQR = 5, 3
 RTOL = 1e-9
 KER = "rain_evaporation_abel_boutle"

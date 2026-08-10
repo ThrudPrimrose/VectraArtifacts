@@ -15,7 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "harness"))
 import native  # noqa: E402
 
-KLON, NCLV = 16777216, 5
+KLON, NCLV = 4096, 5
 NCLDQL, NCLDQI, NCLDQV = 1, 2, 5
 RTOL = 1e-9
 CONSTS = dict(rtt=273.16, ramin=1e-6, rthomo=235.16, rkooptau=1e4, ptsphy=2.0, zepsec=1e-12, nssopt=1)

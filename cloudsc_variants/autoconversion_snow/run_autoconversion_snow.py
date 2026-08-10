@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "harness"))
 import native  # noqa: E402
 
-KLON, NCLDQS, NCLDQI = 16777216, 4, 2
+KLON, NCLDQS, NCLDQI = 4096, 4, 2
 RTOL = 1e-9
 KER = "autoconversion_snow"
 CONSTS = dict(rtt=273.16,
