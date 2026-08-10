@@ -55,6 +55,11 @@ sys.path.insert(0, os.path.join(HERE, "harness"))
 import regen_sdfgs  # noqa: E402  (also installs the mpi4py stub, before dace is imported)
 import native  # noqa: E402
 
+# Safe to import ahead of the mpi4py-stub/dace ordering above: configure_dace() only
+# imports dace.config lazily, inside its own body, so nothing here touches dace at
+# import time.
+from vectra_artifacts.compilers import Compiler, CostModel, configure_dace, get_flags  # noqa: E402
+
 # `timer(1) = elapsed_time * <scale>` in the .f90, where elapsed_time is in seconds.
 TIMER_ASSIGN = re.compile(r"^\s*timer\(1\)\s*=\s*elapsed_time\s*\*\s*([0-9.eEdD+-]+)", re.IGNORECASE | re.MULTILINE)
 TIMER_SECONDS = re.compile(r"^\s*elapsed_time\s*=\s*real\(finish\s*-\s*start,\s*8\)\s*/\s*real\(count_rate,\s*8\)",
@@ -222,16 +227,80 @@ def report(results):
           "separately;\nratio_vs_F = median original Fortran / median lane (>1 means the lane is faster)")
 
 
+def configure_dace_from_environment(compiler_label, cost_model_label):
+    """Apply the (compiler, cost-model, cpu) the caller sourced -- via one of
+    scripts/source.<compiler>_<cpu>_<cost_model>.sh, which export CXX_COMPILER /
+    CXX_COSTMODEL / CPU_NAME / CXX_MATH -- to DaCe's own compiler.cpu.* config.
+
+    Previously sdfg.compile() (in dace_lane, below) just used whatever CC/CXX happened
+    to be left over in the ambient shell env -- no cost-model flags reached the compile
+    at all, and the compiler was only accidentally the intended one -- while
+    --compiler/--cost_model only labelled the raw-data filename. Same class of bug
+    already fixed in only_vec.py / only_vec_cloudsc_sdfg.py for the other two drivers;
+    unlike those, this script calls sdfg.compile() in-process, so configure_dace() (an
+    in-memory dace.config.Config mutation) is the right mechanism here -- there's no
+    subprocess-isolation boundary for an env var to have to cross.
+
+    Raises if --compiler/--cost_model (used for the raw-data filename) disagree with
+    the sourced environment, so a mislabeled output file fails loudly at startup
+    instead of silently reporting the wrong cell under the wrong name.
+    """
+    env_compiler = os.environ.get("CXX_COMPILER")
+    env_cost_model = os.environ.get("CXX_COSTMODEL")
+    if not env_compiler or not env_cost_model:
+        print(
+            "[bench_variants] WARNING: CXX_COMPILER/CXX_COSTMODEL not set in the "
+            "environment -- source scripts/source.<compiler>_<cpu>_<cost_model>.sh "
+            "before running this script, or DaCe compiles with its own untouched "
+            "defaults (no cost-model flags applied, compiler unconfirmed).",
+            file=sys.stderr,
+        )
+        return None
+
+    if compiler_label and compiler_label != env_compiler:
+        raise SystemExit(
+            f"--compiler {compiler_label!r} does not match the sourced environment's "
+            f"CXX_COMPILER={env_compiler!r} -- the raw-data filename would mislabel "
+            f"what actually got compiled. Source the matching source.*.sh, or fix "
+            f"--compiler."
+        )
+    if cost_model_label and cost_model_label != env_cost_model:
+        raise SystemExit(
+            f"--cost_model {cost_model_label!r} does not match the sourced "
+            f"environment's CXX_COSTMODEL={env_cost_model!r} -- the raw-data filename "
+            f"would mislabel what actually got compiled. Source the matching "
+            f"source.*.sh, or fix --cost_model."
+        )
+
+    flag_set = get_flags(
+        Compiler(env_compiler),
+        CostModel(env_cost_model),
+        math=os.environ.get("CXX_MATH") == "1",
+        cpu=os.environ.get("CPU_NAME") or None,
+    )
+    configure_dace(flag_set)
+    print(
+        f"[bench_variants] DaCe compiler.cpu.* <- {flag_set.compiler.value}/"
+        f"{flag_set.cost_model.value} (cpu={flag_set.cpu or 'unset'}, "
+        f"executable={flag_set.compiler.executable()})"
+    )
+    return flag_set
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--only", choices=regen_sdfgs.VARIANTS, help="benchmark a single variant (default: all)")
     ap.add_argument("--reps", type=int, default=50, help="timed repetitions per lane (default 50)")
     ap.add_argument("--frontend", choices=("fortran", "python", "both"), default="both")
     ap.add_argument("--skip-regen", action="store_true", help="reuse the checked-in SDFGs instead of regenerating")
-    ap.add_argument("--compiler", choices=("clang", "gcc"), help="must pick a compiler (for the raw data output)")
+    ap.add_argument("--compiler", choices=("clang", "gcc"),
+                     help="for the raw data output filename; must match the sourced source.*.sh's CXX_COMPILER")
     ap.add_argument("--cluster", choices=("eiger", "daint"), help="must pick a cluster (for the raw data output)")
-    ap.add_argument("--cost_model", choices=("cheap", "default", "unlimited", "disabled"), help="must pick a cost_model (for the raw data output)")
+    ap.add_argument("--cost_model", choices=("cheap", "default", "unlimited", "disabled"),
+                     help="for the raw data output filename; must match the sourced source.*.sh's CXX_COSTMODEL")
     args = ap.parse_args()
+
+    configure_dace_from_environment(args.compiler, args.cost_model)
 
     variants = (args.only, ) if args.only else regen_sdfgs.VARIANTS
     frontends = ("fortran", "python") if args.frontend == "both" else (args.frontend, )
