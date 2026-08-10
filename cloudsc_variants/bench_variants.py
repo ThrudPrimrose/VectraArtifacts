@@ -111,10 +111,25 @@ def fortran_lane(mod, variant, arrays, reps):
     """Run the original CloudSC Fortran, returning (outputs, cold_us, timed_us)."""
     to_us, slot2 = fortran_timer_to_us(variant)
     samples, out = [], None
+    # Purely diagnostic prints (no change to what's measured or how) -- rep 0 is the
+    # only call that can also trigger the one-time gfortran compile (run_original_fortran
+    # only compiles lib<variant>_orig.so if it doesn't already exist), so a hang stuck
+    # before "rep 0 done" is the compile or the very first execution; a hang stuck
+    # partway through later reps is something going wrong across repeated calls to an
+    # already-compiled, already-successfully-run kernel -- two very different problems,
+    # and otherwise indistinguishable from outside since both just look like "no output".
+    print(f"  [fortran_lane] {variant}: starting rep 0/{reps} "
+          f"(compiles lib{variant}_orig.so first if it doesn't exist yet)", flush=True)
+    t_rep0 = time.perf_counter()
     wall0 = time.perf_counter()
     for rep in range(reps + 1):
         timer = np.zeros(2)
         got = mod.run_original_fortran(arrays, timer_out=timer)
+        if rep == 0:
+            print(f"  [fortran_lane] {variant}: rep 0 done in {time.perf_counter() - t_rep0:.2f}s", flush=True)
+        elif rep % 50 == 0:
+            print(f"  [fortran_lane] {variant}: rep {rep}/{reps} done "
+                  f"({time.perf_counter() - wall0:.2f}s elapsed)", flush=True)
         if slot2 is False and timer[1] != 0.0:
             raise AssertionError(f"{variant}: timer(2) is never assigned in the .f90 but came back {timer[1]}")
         samples.append(timer[0] * to_us)
@@ -161,7 +176,14 @@ def dace_lane(mod, variant, frontend, arrays, reps, compiler=None, cost_model=No
         shutil.rmtree(sdfg.build_folder, ignore_errors=True)
     sdfg.instrument = dace.InstrumentationType.Timer
     sdfg.clear_instrumentation_reports()
+    # Purely diagnostic (no change to what's measured or how) -- same reasoning as the
+    # rep-progress prints in fortran_lane(): sdfg.compile() runs a real cmake+build, so a
+    # hang stuck before "compile done" is the C++ compile itself; stuck partway through
+    # later reps is something else entirely, and otherwise indistinguishable from outside.
+    print(f"  [dace_lane] {variant}/{frontend}: compiling...", flush=True)
+    t_compile = time.perf_counter()
     csdfg = sdfg.compile()
+    print(f"  [dace_lane] {variant}/{frontend}: compiled in {time.perf_counter() - t_compile:.2f}s", flush=True)
 
     order = "F" if frontend == "fortran" else "C"
     live = {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
@@ -177,6 +199,9 @@ def dace_lane(mod, variant, frontend, arrays, reps, compiler=None, cost_model=No
         wall += (time.perf_counter() - t0) * 1e6
         if rep == 0:
             out = {k: live[k].copy() for k in mod.OUT}
+        elif rep % 50 == 0:
+            print(f"  [dace_lane] {variant}/{frontend}: rep {rep}/{reps} done "
+                  f"({wall / 1e6:.2f}s of csdfg() time so far)", flush=True)
     csdfg.finalize()  # __dace_exit flushes the accumulated report
 
     report = sdfg.get_latest_report()
