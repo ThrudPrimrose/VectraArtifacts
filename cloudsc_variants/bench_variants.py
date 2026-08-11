@@ -358,4 +358,23 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _exit_code = main()
+    # main() has returned -- every raw_data_*.txt has been written and the summary
+    # table printed, i.e. all real work for this cost-model cell is done. A plain
+    # `raise SystemExit(...)` here hands control to Python's normal interpreter
+    # shutdown (atexit handlers, GC finalizers, unloading every native extension
+    # this process pulled in -- and after a full sweep that's 10 separately
+    # compiled-and-loaded DaCe shared libraries, on the same very-new Python 3.14
+    # build where regen_sdfgs.py is *already confirmed* to segfault during that
+    # exact phase, well after its own real work is done). A run that completed
+    # every variant (raw_data files all present and complete) but still got killed
+    # by the SLURM time limit is consistent with the same class of shutdown-time
+    # issue showing up here as a hang instead of a crash. Print a clear "done"
+    # marker so a hung job's log makes that unambiguous, flush explicitly since
+    # os._exit() skips the normal buffered-stream flush on exit, then bypass
+    # interpreter shutdown entirely rather than trust it not to hang -- there is
+    # nothing left for it to safely do at this point anyway.
+    print(f"\n[main] returned exit code {_exit_code} -- all work done, exiting now", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_exit_code)

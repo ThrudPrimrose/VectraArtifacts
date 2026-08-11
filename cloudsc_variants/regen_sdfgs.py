@@ -73,4 +73,18 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _exit_code = main()
+    # main() has returned -- every .sdfg has been written and "regenerated N SDFG(s)"
+    # printed, i.e. all real work is done. Confirmed interactively: this process then
+    # reliably segfaults during Python's own interpreter shutdown (almost certainly
+    # native LLVM/MLIR cleanup code in dace-fortran's HLFIR bindings, on this very new
+    # Python 3.14 build), strictly AFTER that point -- a `raise SystemExit(...)` here
+    # hands control to exactly that shutdown sequence. os._exit() skips it entirely
+    # (no atexit handlers, no GC finalizers, no unloading native extensions), which
+    # doesn't just work around the crash's symptom, it removes the actual code path
+    # that's been crashing -- there's nothing left for that shutdown to safely do at
+    # this point anyway. Flush explicitly first since os._exit() skips the normal
+    # buffered-stream flush on exit.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(_exit_code)
