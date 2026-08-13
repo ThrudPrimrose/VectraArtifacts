@@ -91,6 +91,44 @@ def run_native(arrays, lang_map, lang):
     return {k: bufs[k] for k in OUT}
 
 
+# compute_saturation_values's python-frontend SDFG declares every array axis-reversed
+# ([KLEV, KLON] instead of [KLON, KLEV]) so KLON lands at unit stride under DaCe's
+# default C-contiguous storage -- see saturation_calculation_dace.py's module
+# docstring and lu_solver_dace.py's for the full rationale. ``.T`` is a full-axis
+# reversal for any ndim and a safe no-op for 1-D arrays, so it can be applied
+# unconditionally here: every array in this kernel is 2-D ``[KLON, KLEV]``.
+def _to_python_frontend_layout(arrays):
+    return {k: np.array(v.T, order="C", copy=True) for k, v in arrays.items()}
+
+
+def _from_python_frontend_layout(live, keys):
+    return {k: live[k].T.copy() for k in keys}
+
+
+def make_live(tag, arrays, order):
+    """bench_variants.py hook: build the per-call live buffers for one SDFG."""
+    if tag == "python_frontend":
+        return _to_python_frontend_layout(arrays)
+    return {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
+
+
+def refresh_live(tag, live, arrays):
+    """bench_variants.py hook: refill ``live`` from pristine ``arrays`` before each rep."""
+    if tag == "python_frontend":
+        for k, v in arrays.items():
+            np.copyto(live[k], np.array(v.T, order="C", copy=True))
+        return
+    for k, v in arrays.items():
+        np.copyto(live[k], v)
+
+
+def extract_out(tag, live, out_keys):
+    """bench_variants.py hook: pull ``OUT`` back out of ``live`` in the canonical shape."""
+    if tag == "python_frontend":
+        return _from_python_frontend_layout(live, out_keys)
+    return {k: live[k].copy() for k in out_keys}
+
+
 def sdfg_kwargs(tag, a):
     """Array + symbol kwargs for one compiled-SDFG call; ``a`` holds the live buffers."""
     sc = {k: np.float64(CONSTS[k]) for k in CONST_ORDER}
@@ -103,6 +141,10 @@ def run_sdfg(tag, arrays, fortran_layout):
     import dace
     sdfg = dace.SDFG.from_file(os.path.join(HERE, f"{KER}_{tag}.sdfg"))
     csdfg = sdfg.compile()
+    if tag == "python_frontend":
+        a = _to_python_frontend_layout(arrays)
+        csdfg(**sdfg_kwargs(tag, a))
+        return _from_python_frontend_layout(a, OUT)
     order = "F" if fortran_layout else "C"
     a = {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
     csdfg(**sdfg_kwargs(tag, a))

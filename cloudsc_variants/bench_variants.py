@@ -186,19 +186,34 @@ def dace_lane(mod, variant, frontend, arrays, reps, compiler=None, cost_model=No
     print(f"  [dace_lane] {variant}/{frontend}: compiled in {time.perf_counter() - t_compile:.2f}s", flush=True)
 
     order = "F" if frontend == "fortran" else "C"
-    live = {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
-    kwargs = mod.sdfg_kwargs(f"{frontend}_frontend", live)
+    tag = f"{frontend}_frontend"
+    # Optional per-kernel hooks: a variant whose SDFG expects a different physical
+    # array layout than the canonical arrays dict (e.g. lu_solver's python-frontend,
+    # which declares its arrays axis-reversed so the parallel KLON dimension lands at
+    # unit stride -- see lu_solver_dace.py's module docstring) defines make_live /
+    # refresh_live / extract_out on its harness module to adapt to/from that layout.
+    # Every other module doesn't define them, and dace_lane() falls back to exactly
+    # today's behavior (same shape as `arrays`, just a possible F/C order flip).
+    make_live = getattr(mod, "make_live", None)
+    refresh_live = getattr(mod, "refresh_live", None)
+    extract_out = getattr(mod, "extract_out", None)
+    live = make_live(tag, arrays, order) if make_live else \
+        {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
+    kwargs = mod.sdfg_kwargs(tag, live)
     out, wall = None, 0.0
     for rep in range(reps + 1):
         # These kernels accumulate in place, so every rep must start from the pristine
         # inputs. The refill sits outside the instrumented region either way.
-        for k, v in arrays.items():
-            np.copyto(live[k], v)
+        if refresh_live:
+            refresh_live(tag, live, arrays)
+        else:
+            for k, v in arrays.items():
+                np.copyto(live[k], v)
         t0 = time.perf_counter()
         csdfg(**kwargs)
         wall += (time.perf_counter() - t0) * 1e6
         if rep == 0:
-            out = {k: live[k].copy() for k in mod.OUT}
+            out = extract_out(tag, live, mod.OUT) if extract_out else {k: live[k].copy() for k in mod.OUT}
         elif rep % 50 == 0:
             print(f"  [dace_lane] {variant}/{frontend}: rep {rep}/{reps} done "
                   f"({wall / 1e6:.2f}s of csdfg() time so far)", flush=True)

@@ -73,6 +73,51 @@ def run_native(arrays, lang_map, lang):
     return {k: bufs[k] for k in OUT}
 
 
+# lu_solver's python-frontend SDFG declares zqlhs/zqxn with axes reversed
+# relative to every other lane -- [NCLV, NCLV, KLON] / [NCLV, KLON] instead of
+# [KLON, NCLV, NCLV] / [KLON, NCLV] -- so KLON (the embarrassingly-parallel
+# per-column LU-solve dimension) lands at unit stride under DaCe's default
+# C-contiguous storage, instead of stride NCLV**2 (a runtime value LLVM can't
+# prove nonzero, which is what defeated auto-vectorization on this loop nest
+# in the first place). See lu_solver_dace.py's module docstring for the full
+# explanation. These helpers transpose to/from that layout only for
+# tag == "python_frontend"; every other tag is untouched, and bench_variants.py
+# falls back to its own generic behavior for kernels that don't define them.
+_REVERSE_AXES = {"zqlhs": (2, 1, 0), "zqxn": (1, 0)}
+
+
+def _to_python_frontend_layout(arrays):
+    return {k: np.ascontiguousarray(v.transpose(_REVERSE_AXES[k])) for k, v in arrays.items()}
+
+
+def _from_python_frontend_layout(live, keys):
+    return {k: live[k].transpose(_REVERSE_AXES[k]).copy() for k in keys}
+
+
+def make_live(tag, arrays, order):
+    """bench_variants.py hook: build the per-call live buffers for one SDFG."""
+    if tag == "python_frontend":
+        return _to_python_frontend_layout(arrays)
+    return {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
+
+
+def refresh_live(tag, live, arrays):
+    """bench_variants.py hook: refill ``live`` from pristine ``arrays`` before each rep."""
+    if tag == "python_frontend":
+        for k, v in arrays.items():
+            np.copyto(live[k], np.ascontiguousarray(v.transpose(_REVERSE_AXES[k])))
+        return
+    for k, v in arrays.items():
+        np.copyto(live[k], v)
+
+
+def extract_out(tag, live, out_keys):
+    """bench_variants.py hook: pull ``OUT`` back out of ``live`` in the canonical shape."""
+    if tag == "python_frontend":
+        return _from_python_frontend_layout(live, out_keys)
+    return {k: live[k].copy() for k in out_keys}
+
+
 def sdfg_kwargs(tag, a):
     """Array + symbol kwargs for one compiled-SDFG call; ``a`` holds the live buffers."""
     if tag == "fortran_frontend":
@@ -84,6 +129,10 @@ def run_sdfg(tag, arrays, fortran_layout):
     import dace
     sdfg = dace.SDFG.from_file(os.path.join(HERE, f"{KER}_{tag}.sdfg"))
     csdfg = sdfg.compile()
+    if tag == "python_frontend":
+        a = _to_python_frontend_layout(arrays)
+        csdfg(**sdfg_kwargs(tag, a))
+        return _from_python_frontend_layout(a, OUT)
     order = "F" if fortran_layout else "C"
     a = {k: np.array(v, order=order, copy=True) for k, v in arrays.items()}
     csdfg(**sdfg_kwargs(tag, a))

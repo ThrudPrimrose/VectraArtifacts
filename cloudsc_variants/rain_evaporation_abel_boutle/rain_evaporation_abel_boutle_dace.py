@@ -1,4 +1,17 @@
-"""DaCe Python-frontend version of ``rain_evaporation_abel_boutle``."""
+"""DaCe Python-frontend version of ``rain_evaporation_abel_boutle``.
+
+The one multi-dimensional array (``zsolqa``) is declared **axis reversed**
+relative to the Fortran source (``zsolqa[jl, a, b]`` -> ``zsolqa[b, a, jl]``,
+shape ``[NCLV, NCLV, KLON]`` instead of ``[KLON, NCLV, NCLV]``) -- deliberate,
+not a typo. See ``lu_solver_dace.py``'s module docstring for the full
+explanation. Every other array here is 1-D (``[KLON]``) and needs no change.
+
+Callers must hand this program ``zsolqa`` laid out ``[NCLV, NCLV, KLON]`` --
+see ``run_rain_evaporation_abel_boutle.py``'s ``make_live`` / ``refresh_live``
+/ ``extract_out`` hooks, which transpose to/from the canonical
+``[KLON, NCLV, NCLV]`` shape used by the NumPy oracle, the original Fortran
+lane, and the Fortran-frontend SDFG.
+"""
 import dace
 import numpy as np
 
@@ -14,7 +27,7 @@ def rain_evaporation_abel_boutle(
         zqsliq: dace.float64[KLON], zqxfg_ncldqr: dace.float64[KLON],
         zcovptot: dace.float64[KLON], zcovpclr: dace.float64[KLON],
         zcovpmax: dace.float64[KLON], zrho: dace.float64[KLON], pap: dace.float64[KLON],
-        zsolqa: dace.float64[KLON, NCLV, NCLV], zevap_out: dace.float64[KLON],
+        zsolqa: dace.float64[NCLV, NCLV, KLON], zevap_out: dace.float64[KLON],
         rtt: dace.float64, rv: dace.float64, rd: dace.float64, rprecrhmax: dace.float64,
         rcovpmin: dace.float64, rdensref: dace.float64, ptsphy: dace.float64, zepsec: dace.float64,
         rcl_fac1: dace.float64, rcl_fac2: dace.float64, rcl_cdenom1: dace.float64,
@@ -62,8 +75,8 @@ def rain_evaporation_abel_boutle(
             zevap = min(zdpevap, zqxfg_ncldqr[jl])
             zevap_out[jl] = zevap
 
-            zsolqa[jl, NCLDQV - 1, NCLDQR - 1] = zsolqa[jl, NCLDQV - 1, NCLDQR - 1] + zevap
-            zsolqa[jl, NCLDQR - 1, NCLDQV - 1] = zsolqa[jl, NCLDQR - 1, NCLDQV - 1] - zevap
+            zsolqa[NCLDQR - 1, NCLDQV - 1, jl] = zsolqa[NCLDQR - 1, NCLDQV - 1, jl] + zevap
+            zsolqa[NCLDQV - 1, NCLDQR - 1, jl] = zsolqa[NCLDQV - 1, NCLDQR - 1, jl] - zevap
 
             zcovptot[jl] = max(rcovpmin, zcovptot[jl] - max(0.0,
                                (zcovptot[jl] - za[jl]) * zevap / zqxfg_ncldqr[jl]))
