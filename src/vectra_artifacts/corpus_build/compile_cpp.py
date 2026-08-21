@@ -450,9 +450,9 @@ def load_cpp_library(root, build_dir, so_name: str, **kwargs) -> ctypes.CDLL:
 
 def _make_array_pool(len_1d: int, dtype):
     rng     = np.random.default_rng(42)
-    n_2d    = len_1d * len_1d
     SSYM    = 4
-    dim_2d  = min(len_1d, 4096)
+    dim_2d  = min(len_1d, 4096)   # cap: 2D pool arrays (aa/bb/cc/dd/flat_2d_array) are sized
+    n_2d    = dim_2d * dim_2d     # off this, not raw len_1d -- len_1d^2 is unallocatable past ~46k
     dim_3d  = 32
     arr_3d  = rng.random((dim_3d, dim_3d, dim_3d)).astype(dtype)
     idx_arr = np.mod(np.arange(len_1d, dtype=np.int64) * 7 + 3, len_1d)
