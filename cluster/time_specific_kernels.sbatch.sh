@@ -25,7 +25,18 @@
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# sbatch copies this script into a spool dir (/var/spool/slurmd/...) and
+# runs it FROM THERE, so ${BASH_SOURCE[0]} at job runtime points at that
+# spool copy, not this file's real location in the checkout -- resolving
+# ROOT from it silently breaks the relative `python3 time_specific_kernels.py`
+# call below. $SLURM_SUBMIT_DIR (the directory `sbatch` was invoked from) is
+# what's actually reliable under SLURM; BASH_SOURCE is only a fallback for
+# running this script directly with `bash` outside SLURM.
+if [[ -n "${SLURM_SUBMIT_DIR:-}" ]]; then
+    ROOT="$SLURM_SUBMIT_DIR"
+else
+    ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 cd "$ROOT"
 export PATH="$SCRATCH/llvm-env/view/bin:$PATH"
 export LD_LIBRARY_PATH="/capstor/scratch/cscs/abonsall/spack/opt/spack/linux-neoverse_v2/llvm-21.1.4-uyntqbmcpg6nh5xrgtxkoaorygjfxgsh/lib/aarch64-unknown-linux-gnu:$LD_LIBRARY_PATH"
