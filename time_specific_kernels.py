@@ -137,6 +137,40 @@ def _kernel_source_path(root: pathlib.Path, kernel: str, pattern: str) -> Option
     return matches[0] if matches else None
 
 
+def _read_csv_body(path: pathlib.Path) -> tuple[Optional[str], list[list[str]]]:
+    """Return (header_line, data_rows) for a CSV, or (None, []) if it doesn't exist yet."""
+    if not path.exists():
+        return None, []
+    lines = path.read_text().splitlines()
+    if not lines:
+        return None, []
+    return lines[0], [line.split(",") for line in lines[1:] if line.strip()]
+
+
+def _merge_kernel_rows(
+    kept_rows: list[list[str]], new_rows: list[list[str]], replace_kernels: set[str]
+) -> list[list[str]]:
+    """kept_rows minus anything for a kernel we just recomputed, plus new_rows — stable-sorted
+    by kernel (first field) so each kernel's own row order is preserved within its group."""
+    kept = [r for r in kept_rows if r and r[0] not in replace_kernels]
+    merged = kept + new_rows
+    merged.sort(key=lambda r: r[0])
+    return merged
+
+
+def _merge_write_csv(path: pathlib.Path, header: str, new_rows: list[tuple], replace_kernels: set[str]) -> None:
+    """
+    Write `new_rows` (each row's first field is a kernel name) to `path`,
+    preserving any pre-existing rows for OTHER kernels already there. Plain
+    write_text() would silently wipe out, e.g., a prior baseline run's rows
+    the next time a --dace-variant run (or any run touching a different
+    kernel subset) writes into the same results dir.
+    """
+    _, old_rows = _read_csv_body(path)
+    merged = _merge_kernel_rows(old_rows, [[str(x) for x in row] for row in new_rows], replace_kernels)
+    path.write_text("\n".join([header] + [",".join(r) for r in merged]) + "\n")
+
+
 # ── SLURM / cluster helpers ──────────────────────────────────────────────────
 def _resolve_shard(args) -> tuple[int, int]:
     shard_id   = args.shard_id
@@ -185,10 +219,25 @@ def _dace_timer_worker(args_tuple):
     hang or crash in DaCe / the generated code can't take the whole run
     down; the caller applies its own timeout.
 
-    Returns (kernel, "ok", raw_timings_us) on success, or
+    If ``variant_cpp`` is given, an initial normal compile runs first (DaCe
+    needs the auto-generated CMakeLists.txt / stub headers alongside the
+    kernel .cpp — a hand-edited .cpp alone isn't a buildable tree), then
+    that compile's generated ``src/cpu/*.cpp`` is overwritten with
+    ``variant_cpp``'s contents and ``sdfg.regenerate_code`` is set to
+    False before recompiling — this is the ONLY correct way to get DaCe to
+    rebuild from hand-edited generated code: ``compiler:use_cache`` looks
+    tempting but is wrong here, since (per dace/sdfg/sdfg.py's
+    ``SDFG.compile()``) it just reloads the existing .so unchanged when one
+    is already present, without even looking at the .cpp on disk.
+    Overridden kernels are reported back under ``"<kernel>__<variant
+    stem>"`` (not the bare kernel name) so a baseline run and a variant run
+    pointed at the same results dir accumulate as distinct, directly
+    comparable rows instead of one silently overwriting the other.
+
+    Returns (reported_name, "ok", raw_timings_us) on success, or
     (kernel, None, error_message) on failure.
     """
-    py_file, kernel, kdir, len_1d, is_float, reps = args_tuple
+    py_file, kernel, kdir, len_1d, is_float, reps, variant_cpp = args_tuple
 
     import importlib.util
     import pathlib as _pl
@@ -236,9 +285,34 @@ def _dace_timer_worker(args_tuple):
         return kernel, None, f"unresolved args: {missing}"
 
     try:
-        csdfg = sdfg.compile()
+        csdfg = sdfg.compile()   # baseline compile — creates the buildable tree
     except Exception as exc:
         return kernel, None, f"compile failed: {exc}"
+
+    reported_name = kernel
+    if variant_cpp is not None:
+        build_root = _pl.Path(sdfg.build_folder)
+        target_cpp = None
+        for c in sorted(build_root.rglob("src/cpu/*.cpp"), key=lambda p: len(p.parts), reverse=True):
+            if "CMakeFiles" in str(c) or "/sample/" in str(c):
+                continue
+            target_cpp = c
+            break
+        if target_cpp is None:
+            return kernel, None, f"variant override requested but no generated src/cpu/*.cpp found under {build_root}"
+
+        try:
+            target_cpp.write_text(_pl.Path(variant_cpp).read_text())
+        except Exception as exc:
+            return kernel, None, f"failed writing variant source {variant_cpp} -> {target_cpp}: {exc}"
+
+        sdfg.regenerate_code = False   # keep the edited .cpp; just rebuild+relink from it
+        try:
+            csdfg = sdfg.compile()
+        except Exception as exc:
+            return kernel, None, f"variant recompile failed: {exc}"
+
+        reported_name = f"{kernel}__{_pl.Path(variant_cpp).stem}"
 
     try:
         sdfg.clear_instrumentation_reports()
@@ -270,7 +344,7 @@ def _dace_timer_worker(args_tuple):
         )
 
     timings_us = [e.duration for e in events[1:]]  # drop the warm-up event
-    return kernel, "ok", timings_us
+    return reported_name, "ok", timings_us
 
 
 def run_dace_subset(
@@ -284,6 +358,7 @@ def run_dace_subset(
     reps: int,
     len_1d: int,
     kernel_timeout: int,
+    variants: Optional[dict[str, str]] = None,
 ) -> tuple[Optional[pathlib.Path], list[str], dict[str, str]]:
     from vectra_artifacts.compilers import configure_dace
     configure_dace(flag_set)
@@ -292,6 +367,7 @@ def run_dace_subset(
         import dace.config
         dace.config.Config.set("compiler", "cpu", "executable", value=cxx_override)
 
+    variants = variants or {}
     missing: list[str] = []
     work_items = []
     for k in kernels:
@@ -299,7 +375,7 @@ def run_dace_subset(
         if src is None:
             missing.append(k)
             continue
-        work_items.append((src, k, build_dir / k, len_1d, is_float, reps))
+        work_items.append((src, k, build_dir / k, len_1d, is_float, reps, variants.get(k)))
     if missing:
         print(f"  [dace] WARNING: no DaCe source for: {', '.join(missing)}", file=sys.stderr)
 
@@ -313,7 +389,8 @@ def run_dace_subset(
         try:
             for item in work_items:
                 kernel = item[1]
-                print(f"  [dace] timing {kernel} ...", end=" ", flush=True)
+                variant_tag = f" [variant: {pathlib.Path(item[6]).name}]" if item[6] else ""
+                print(f"  [dace] timing {kernel}{variant_tag} ...", end=" ", flush=True)
                 async_result = pool.apply_async(_dace_timer_worker, (item,))
                 try:
                     k_r, status, payload = async_result.get(timeout=kernel_timeout)
@@ -324,10 +401,10 @@ def run_dace_subset(
                         timings_us = payload
                         med, mn, mx = statistics.median(timings_us), min(timings_us), max(timings_us)
                         sd = statistics.stdev(timings_us) if len(timings_us) > 1 else 0.0
-                        print(f"ok  median={med:.1f}µs  min={mn:.1f}µs", flush=True)
-                        rows.append((kernel, med, mn, mx, sd, len(timings_us)))
+                        print(f"ok  median={med:.1f}µs  min={mn:.1f}µs  -> reported as '{k_r}'", flush=True)
+                        rows.append((k_r, med, mn, mx, sd, len(timings_us)))
                         for rep_idx, t in enumerate(timings_us):
-                            raw_rows.append((kernel, rep_idx, t))
+                            raw_rows.append((k_r, rep_idx, t))
                 except multiprocessing.TimeoutError:
                     print(f"SKIP — timed out after {kernel_timeout}s", flush=True)
                     failures[kernel] = f"timed out after {kernel_timeout}s"
@@ -344,15 +421,17 @@ def run_dace_subset(
     out_csv = out_dir / "timing_report.csv"
     raw_csv = out_dir / "timing_report_raw_timings.csv"
 
-    lines = ["kernel,median_us,min_us,max_us,stdev_us,reps"]
-    for kernel, med, mn, mx, sd, n in sorted(rows):
-        lines.append(f"{kernel},{med:.3f},{mn:.3f},{mx:.3f},{sd:.3f},{n}")
-    out_csv.write_text("\n".join(lines) + "\n")
-
-    raw_lines = ["kernel,rep,timing_us"]
-    for kernel, rep_idx, t in raw_rows:
-        raw_lines.append(f"{kernel},{rep_idx},{t:.3f}")
-    raw_csv.write_text("\n".join(raw_lines) + "\n")
+    reported_kernels = {r[0] for r in rows}
+    _merge_write_csv(
+        out_csv, "kernel,median_us,min_us,max_us,stdev_us,reps",
+        [(k, f"{med:.3f}", f"{mn:.3f}", f"{mx:.3f}", f"{sd:.3f}", n) for k, med, mn, mx, sd, n in rows],
+        replace_kernels=reported_kernels,
+    )
+    _merge_write_csv(
+        raw_csv, "kernel,rep,timing_us",
+        [(k, rep_idx, f"{t:.3f}") for k, rep_idx, t in raw_rows],
+        replace_kernels=reported_kernels,
+    )
 
     print(f"  [dace] {len(rows)} kernel(s) timed, {len(failures)} failed/skipped -> {out_csv}")
     return raw_csv, missing, failures
@@ -416,6 +495,13 @@ def run_cpp_subset(
     if unbound:
         print(f"  [cpp] WARNING: no SIGNATURES entry for: {', '.join(unbound)}", file=sys.stderr)
 
+    # run_timing_phase() itself does a plain overwrite of out_csv/raw_csv (it
+    # has no notion of "kernels other runs already wrote here") — snapshot
+    # what's there first and re-merge afterward so a prior run's kernels
+    # (e.g. a different --kernels subset from an earlier invocation) survive.
+    prev_summary_header, prev_summary_rows = _read_csv_body(out_csv)
+    prev_raw_header, prev_raw_rows = _read_csv_body(raw_csv)
+
     compile_cpp.run_timing_phase(
         so_path=so,
         signatures=sigs,
@@ -427,6 +513,20 @@ def run_cpp_subset(
         kernel_timeout=kernel_timeout,
         raw_csv=raw_csv,
     )
+
+    new_summary_header, new_summary_rows = _read_csv_body(out_csv)
+    new_raw_header, new_raw_rows = _read_csv_body(raw_csv)
+    just_computed = {r[0] for r in new_summary_rows} if new_summary_rows else set(sigs)
+
+    summary_header = new_summary_header or prev_summary_header or \
+        "kernel,median_ns,min_ns,stdev_ns,vectorized,vec_count,missed_count,remark_vectorized,remark_mismatch"
+    merged_summary = _merge_kernel_rows(prev_summary_rows, new_summary_rows, just_computed)
+    out_csv.write_text("\n".join([summary_header] + [",".join(r) for r in merged_summary]) + "\n")
+
+    raw_header = new_raw_header or prev_raw_header or "kernel,rep,timing_ns"
+    merged_raw = _merge_kernel_rows(prev_raw_rows, new_raw_rows, just_computed)
+    raw_csv.write_text("\n".join([raw_header] + [",".join(r) for r in merged_raw]) + "\n")
+
     return raw_csv, missing + unbound
 
 
@@ -500,6 +600,15 @@ def parse_args(argv=None):
     ap.add_argument("--math", action="store_true", help="Enable -ffast-math-family flags (default: off, IEEE-ish).")
     ap.add_argument("--cxx", default=None, metavar="PATH",
                      help="Override the compiler executable for BOTH backends (else $CXX or the canonical default).")
+    ap.add_argument(
+        "--dace-variant", action="append", default=None, metavar="KERNEL=PATH", dest="dace_variants",
+        help="Repeatable. For KERNEL, after the normal DaCe compile, overwrite its generated "
+             "src/cpu/*.cpp with the file at PATH (e.g. a hand-edited copy from tsvc_2_adaptations/) "
+             "and rebuild WITHOUT regenerating codegen, then time that. Results are reported under "
+             "'KERNEL__<PATH stem>' so a baseline run and a variant run into the same results dir "
+             "don't overwrite each other. DaCe-side only; the CPP baseline is untouched. "
+             "e.g. --dace-variant s313=tsvc_2_adaptations/s313_variants/Working_S313.cpp",
+    )
 
     ap.add_argument("--runs", "--reps", type=int, default=100, metavar="N", dest="reps",
                      help="Repetitions per kernel per backend — this is your box-plot sample size. (default: 100)")
@@ -537,6 +646,21 @@ def main(argv=None):
 
     if args.cxx:
         os.environ["CXX"] = args.cxx
+
+    dace_variants: dict[str, str] = {}
+    for spec in (args.dace_variants or []):
+        if "=" not in spec:
+            print(f"ERROR: --dace-variant expects KERNEL=PATH, got: {spec!r}", file=sys.stderr)
+            return 1
+        k, _, p = spec.partition("=")
+        k, p = k.strip(), p.strip()
+        if k not in args.kernels:
+            print(f"WARNING: --dace-variant {spec!r} names a kernel not in --kernels ({args.kernels}); ignoring", file=sys.stderr)
+            continue
+        if not pathlib.Path(p).is_file():
+            print(f"ERROR: --dace-variant {spec!r}: no such file: {p}", file=sys.stderr)
+            return 1
+        dace_variants[k] = p
 
     vcfg      = TSVC_VERSION_CONFIG[args.tsvc_version]
     cpp_root  = pathlib.Path(vcfg["cpp_kernels_dir"]).resolve()
@@ -576,6 +700,7 @@ def main(argv=None):
         f"kernel_timeout: {args.kernel_timeout}s",
         f"shard         : {shard_id}/{num_shards} -> {len(my_combos)}/{len(combos)} combo(s) assigned",
         f"skip cpp      : {args.no_cpp}  |  skip dace: {args.no_dace}",
+        f"dace variants : {dace_variants if dace_variants else '(none — all baseline)'}",
         "",
     ]
 
@@ -629,6 +754,7 @@ def main(argv=None):
                     reps=args.reps,
                     len_1d=args.len_1d,
                     kernel_timeout=args.kernel_timeout,
+                    variants=dace_variants,
                 )
 
             combined_dir = out_root / precision / combo_name

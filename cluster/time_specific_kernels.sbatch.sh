@@ -9,6 +9,12 @@
 #   KERNELS="s313 s314 s453 vdotr" COMPILERS="clang gcc" CPUS="arm_grace" \
 #       RUNS=500 sbatch cluster/time_specific_kernels.sbatch.sh
 #
+# To time a hand-edited DaCe kernel variant (see tsvc_2_adaptations/)
+# against the baseline, e.g.:
+#   KERNELS="s313" \
+#   DACE_VARIANTS="s313=tsvc_2_adaptations/s313_variants/Working_S313.cpp" \
+#       sbatch cluster/time_specific_kernels.sbatch.sh
+#
 #SBATCH --job-name=tsvc_subset_timing
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -50,6 +56,20 @@ CPUS="${CPUS:-arm_grace}"
 RUNS="${RUNS:-200}"
 LEN_1D="${LEN_1D:-2097152}"
 
+# Optional: space-separated KERNEL=PATH pairs to swap in a hand-edited
+# post-codegen .cpp for specific DaCe kernels (see tsvc_2_adaptations/),
+# e.g.:
+#   DACE_VARIANTS="s313=tsvc_2_adaptations/s313_variants/Working_S313.cpp s314=tsvc_2_adaptations/s314_variants/works_with_flag.cpp" \
+#       sbatch cluster/time_specific_kernels.sbatch.sh
+# Each pair becomes its own --dace-variant flag below (repeatable, one
+# KERNEL=PATH per flag -- can't just splat the whole string onto a single
+# --dace-variant). CPP baseline is unaffected either way.
+DACE_VARIANTS="${DACE_VARIANTS:-}"
+DACE_VARIANT_ARGS=()
+for spec in $DACE_VARIANTS; do
+    DACE_VARIANT_ARGS+=(--dace-variant "$spec")
+done
+
 # All job output on $SCRATCH, not the repo checkout under $HOME. --out-dir
 # alone only relocates the combined/manifest output -- results_cpp/,
 # results_dace/, and the two compile-artifact build dirs are separate
@@ -65,6 +85,7 @@ mkdir -p "$RESULTS_CPP" "$RESULTS_DACE" "$BUILD_DIR" "$OUT_DIR"
 echo "Host: $(hostname)"
 echo "CXX : ${CXX:-<resolved automatically>}"
 echo "Kernels: $KERNELS"
+echo "DaCe variants: ${DACE_VARIANTS:-(none — all baseline)}"
 echo "Output on scratch: $SCRATCH_BASE"
 
 python3 -u time_specific_kernels.py \
@@ -79,7 +100,8 @@ python3 -u time_specific_kernels.py \
     --results-cpp "$RESULTS_CPP" \
     --results-dace "$RESULTS_DACE" \
     --build-dir "$BUILD_DIR" \
-    --out-dir "$OUT_DIR"
+    --out-dir "$OUT_DIR" \
+    "${DACE_VARIANT_ARGS[@]+"${DACE_VARIANT_ARGS[@]}"}"
 
 echo "Done. Raw per-rep CSVs under $RESULTS_CPP and $RESULTS_DACE;"
 echo "normalized combined CSVs + manifest under $OUT_DIR."
