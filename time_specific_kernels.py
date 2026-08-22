@@ -297,7 +297,16 @@ def _dace_timer_worker(args_tuple):
         return kernel, None, f"unresolved args: {missing}"
 
     try:
-        csdfg = sdfg.compile()   # baseline compile — creates the buildable tree
+        # When a variant override follows, this compile exists ONLY to
+        # produce a buildable tree to overwrite -- don't load the .so into
+        # the process (return_program_handle=False). Loading it here and
+        # then loading a second .so at the same path after the variant
+        # recompile hits DaCe's "already loaded, renaming file" path,
+        # which -- at least on Lustre-backed scratch, reproduced on daint
+        # at len_1d=2**26 -- can hand back a renamed copy missing its
+        # __dace_init_* symbol (a write/copy race), failing the whole run.
+        # Skipping the load here means there's nothing to collide with.
+        csdfg = sdfg.compile(return_program_handle=(variant_cpp is None))
         _log("baseline sdfg.compile() done")
     except Exception as exc:
         return kernel, None, f"compile failed: {exc}"
