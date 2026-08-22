@@ -241,11 +241,21 @@ def _dace_timer_worker(args_tuple):
 
     import importlib.util
     import pathlib as _pl
+    import time as _tm
 
     import dace
     import dace.config
     import dace.dtypes
     from vectra_artifacts.corpus_build.compile_dace import _build_dace_kwargs, _make_array_pool
+
+    _t0 = _tm.perf_counter()
+    def _log(msg):
+        # Phase-by-phase progress so a stall shows WHERE it's stuck (pool
+        # build vs. compile vs. variant recompile vs. reps) instead of just
+        # a bare "timed out after Ns" with no idea which phase ate the time.
+        # This runs inside a forked worker but stdout is inherited from the
+        # parent, so it lands in the same job log as everything else.
+        print(f"    [dace-worker] {kernel} +{_tm.perf_counter() - _t0:6.1f}s  {msg}", flush=True)
 
     dace.config.Config.set("compiler", "allow_view_arguments", value=True)
 
@@ -272,6 +282,7 @@ def _dace_timer_worker(args_tuple):
         if prog is None:
             return kernel, None, "no @dace.program found"
         sdfg = prog.to_sdfg()
+        _log("to_sdfg() done")
     except Exception as exc:
         return kernel, None, f"load/to_sdfg failed: {exc}"
 
@@ -280,12 +291,14 @@ def _dace_timer_worker(args_tuple):
     sdfg.instrument = dace.dtypes.InstrumentationType.Timer
 
     pool = _make_array_pool(len_1d, is_float)
+    _log(f"array pool built (len_1d={len_1d})")
     kwargs, missing = _build_dace_kwargs(sdfg, pool)
     if kwargs is None:
         return kernel, None, f"unresolved args: {missing}"
 
     try:
         csdfg = sdfg.compile()   # baseline compile — creates the buildable tree
+        _log("baseline sdfg.compile() done")
     except Exception as exc:
         return kernel, None, f"compile failed: {exc}"
 
@@ -300,6 +313,7 @@ def _dace_timer_worker(args_tuple):
             break
         if target_cpp is None:
             return kernel, None, f"variant override requested but no generated src/cpu/*.cpp found under {build_root}"
+        _log(f"found generated source to override: {target_cpp}")
 
         try:
             target_cpp.write_text(_pl.Path(variant_cpp).read_text())
@@ -309,6 +323,7 @@ def _dace_timer_worker(args_tuple):
         sdfg.regenerate_code = False   # keep the edited .cpp; just rebuild+relink from it
         try:
             csdfg = sdfg.compile()
+            _log("variant sdfg.compile() (rebuild-only) done")
         except Exception as exc:
             return kernel, None, f"variant recompile failed: {exc}"
 
@@ -321,9 +336,14 @@ def _dace_timer_worker(args_tuple):
 
     try:
         csdfg(**kwargs)              # warm-up — its Timer event is discarded below
-        for _ in range(reps):
+        _log("warm-up call done")
+        for i in range(reps):
             csdfg(**kwargs)
+            if reps >= 20 and (i + 1) % max(1, reps // 5) == 0:
+                _log(f"reps: {i + 1}/{reps}")
+        _log(f"all {reps} reps done")
         csdfg.finalize()             # flushes the accumulated Timer report to disk
+        _log("csdfg.finalize() done")
     except Exception as exc:
         return kernel, None, f"run failed: {exc}"
 
