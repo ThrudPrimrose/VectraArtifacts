@@ -313,15 +313,20 @@ def _dace_timer_worker(args_tuple):
 
     reported_name = kernel
     if variant_cpp is not None:
-        build_root = _pl.Path(sdfg.build_folder)
-        target_cpp = None
-        for c in sorted(build_root.rglob("src/cpu/*.cpp"), key=lambda p: len(p.parts), reverse=True):
-            if "CMakeFiles" in str(c) or "/sample/" in str(c):
-                continue
-            target_cpp = c
-            break
-        if target_cpp is None:
-            return kernel, None, f"variant override requested but no generated src/cpu/*.cpp found under {build_root}"
+        # DaCe writes one .cpp PER CODE OBJECT, and a kernel with a nested
+        # SDFG (e.g. a reduction) gets more than one file under src/cpu/ --
+        # a "grab whichever file is most deeply nested" heuristic can pick
+        # a nested-SDFG file instead of the actual top-level program file
+        # (reproduced on daint: it silently overwrote a nested file, so the
+        # real one it then tried to load was untouched, and worse, DaCe's
+        # __dace_init_<sdfg.name> symbol lookup uses THIS sdfg.name, which
+        # didn't match what got written). The top-level file is
+        # unambiguous: it's always named exactly f"{sdfg.name}.cpp" -- the
+        # same name the __dace_init_* linker symbol is keyed on -- so target
+        # that path directly instead of guessing among multiple candidates.
+        target_cpp = _pl.Path(sdfg.build_folder) / "src" / "cpu" / f"{sdfg.name}.cpp"
+        if not target_cpp.is_file():
+            return kernel, None, f"variant override requested but expected generated source not found: {target_cpp}"
         _log(f"found generated source to override: {target_cpp}")
 
         try:
