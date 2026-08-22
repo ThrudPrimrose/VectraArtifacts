@@ -631,7 +631,14 @@ def parse_args(argv=None):
     ap.add_argument("--compilers", nargs="+", default=["clang"], choices=ALL_COMPILERS, metavar="COMPILER")
     ap.add_argument("--cost-models", nargs="+", default=["unlimited"], choices=ALL_COST_MODELS, metavar="MODEL")
     ap.add_argument("--cpus", nargs="+", default=["apple_m_series"], choices=ALL_CPUS, metavar="CPU")
-    ap.add_argument("--math", action="store_true", help="Enable -ffast-math-family flags (default: off, IEEE-ish).")
+    ap.add_argument("--math", action="store_true",
+                     help="Enable -ffast-math-family flags via get_flags(math=True). NOTE: currently a "
+                          "no-op — vectra_artifacts.compilers.flags._MATH_FLAGS is an empty stub for every "
+                          "compiler. Use --extra-cxxflags for a specific flag like -funsafe-math-optimizations "
+                          "until that's populated.")
+    ap.add_argument("--extra-cxxflags", default="", metavar="FLAGS",
+                     help="Space-separated extra compile flags appended for BOTH backends (CPP compile_object "
+                          "and DaCe's compiler:cpu:args), e.g. --extra-cxxflags '-funsafe-math-optimizations'.")
     ap.add_argument("--cxx", default=None, metavar="PATH",
                      help="Override the compiler executable for BOTH backends (else $CXX or the canonical default).")
     ap.add_argument(
@@ -729,6 +736,7 @@ def main(argv=None):
         f"cost_models   : {args.cost_models}",
         f"cpus          : {args.cpus}",
         f"math          : {args.math}",
+        f"extra cxxflags: {args.extra_cxxflags or '(none)'}",
         f"runs (reps)   : {args.reps}",
         f"len_1d        : {args.len_1d}",
         f"kernel_timeout: {args.kernel_timeout}s",
@@ -751,7 +759,10 @@ def main(argv=None):
             combo_name = f"{compiler}_{cpu}_{cost_model}"
             print(f"\n=== [shard {shard_id}/{num_shards}] [{precision}] {combo_name} ===")
 
-            flag_set = get_flags(Compiler(compiler), CostModel(cost_model), math=args.math, cpu=cpu)
+            flag_set = get_flags(
+                Compiler(compiler), CostModel(cost_model), math=args.math, cpu=cpu,
+                extra=args.extra_cxxflags.split(),
+            )
             manifest.append(
                 f"[{precision}/{combo_name}] cxx={flag_set.compiler.executable()} "
                 f"compile_flags={' '.join(flag_set.compile_flags)}"
