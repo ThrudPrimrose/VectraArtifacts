@@ -241,6 +241,7 @@ def _dace_timer_worker(args_tuple):
 
     import importlib.util
     import pathlib as _pl
+    import re
     import time as _tm
 
     import dace
@@ -329,8 +330,35 @@ def _dace_timer_worker(args_tuple):
             return kernel, None, f"variant override requested but expected generated source not found: {target_cpp}"
         _log(f"found generated source to override: {target_cpp}")
 
+        # The variant file is a hand-edited copy of SOME earlier DaCe-generated
+        # .cpp, with DaCe's own identifiers (__dace_init_<name>, the
+        # <name>_state_t struct, __program_<name>_internal, ...) baked in as
+        # literal text from whatever run originally produced it. That baked-in
+        # <name> is NOT guaranteed to equal THIS run's sdfg.name -- confirmed
+        # on daint, where the naming convention differed between runs/compilers
+        # (e.g. s313_s313_d_single vs s313_d_single_s313_d_single) -- so a raw
+        # copy only links if the two happen to coincide by luck. Detect the
+        # variant's own baked-in name from its __dace_init_ definition and
+        # rewrite every occurrence of it to sdfg.name before writing. Plain
+        # substring replace, not \b-anchored regex: these are underscore-joined
+        # compound identifiers (e.g. __program_<name>_internal) with no regex
+        # word-boundary between the underscore and <name>, so \b would miss them.
+        variant_src = _pl.Path(variant_cpp).read_text()
+        m = re.search(r"__dace_init_(\w+?)\s*\(", variant_src) or re.search(r"(\w+)_state_t\b", variant_src)
+        if m is None:
+            return kernel, None, (
+                f"could not detect the DaCe-generated identifier inside variant file {variant_cpp} "
+                "(expected an occurrence like '__dace_init_<name>(' or '<name>_state_t')"
+            )
+        old_name = m.group(1)
+        if old_name != sdfg.name:
+            _log(f"variant's baked-in identifier '{old_name}' != this run's sdfg.name '{sdfg.name}' -- rewriting")
+            variant_src = variant_src.replace(old_name, sdfg.name)
+        else:
+            _log("variant's baked-in identifier already matches this run's sdfg.name")
+
         try:
-            target_cpp.write_text(_pl.Path(variant_cpp).read_text())
+            target_cpp.write_text(variant_src)
         except Exception as exc:
             return kernel, None, f"failed writing variant source {variant_cpp} -> {target_cpp}: {exc}"
 
